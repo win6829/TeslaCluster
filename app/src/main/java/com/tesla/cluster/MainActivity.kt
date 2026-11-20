@@ -22,6 +22,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,14 +33,13 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.*
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,16 +51,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
+import kotlin.math.exp
 import kotlin.math.roundToInt
-import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 앱 실행 중 화면이 꺼지지 않도록 유지
+        // 앱 실행 중 화면 꺼짐 방지
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent {
             TeslaClusterScreen()
@@ -113,7 +111,6 @@ fun TeslaClusterScreen() {
     var currentDateText by remember { mutableStateOf("") }
     var batteryPct by remember { mutableIntStateOf(88) }
     var isCharging by remember { mutableStateOf(true) }
-    var roadPhase by remember { mutableFloatStateOf(0f) }
 
     var hasLocationPermission by remember {
         mutableStateOf(
@@ -152,7 +149,7 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 2. 60fps 프레임 루프: 속도계 보간, 1씩 부드러운 숫자 변경, 도로 차선 애니메이션
+    // 2. 60fps 프레임 루프: 부드러운 속도 보간 & 1씩 자연스러운 숫자 변경
     LaunchedEffect(Unit) {
         var lastFrameNs = System.nanoTime()
         while (true) {
@@ -166,12 +163,10 @@ fun TeslaClusterScreen() {
             if (abs(diff) < 0.02f) {
                 smoothSpeedKmh = clampedTarget
             } else {
-                // 지수 보간으로 GPS 수신 사이 공백(500ms)에도 끊김 없이 연속 이동
-                val alpha = (1f - kotlin.math.exp(-7.5f * dtSec)).coerceIn(0f, 1f)
+                val alpha = (1f - exp(-7.5f * dtSec)).coerceIn(0f, 1f)
                 smoothSpeedKmh += diff * alpha
             }
 
-            // 숫자가 2 이상 차이날 때 1씩 단계적으로 증가/감소하여 자연스럽게 변경
             val roundedTarget = smoothSpeedKmh.roundToInt()
             when {
                 displayedSpeedInt < roundedTarget -> {
@@ -182,11 +177,6 @@ fun TeslaClusterScreen() {
                     val step = if (displayedSpeedInt - roundedTarget > 15) 2 else 1
                     displayedSpeedInt = (displayedSpeedInt - step).coerceAtLeast(roundedTarget)
                 }
-            }
-
-            if (smoothSpeedKmh > 1.2f) {
-                val laneSpeed = (smoothSpeedKmh / 36f) * dtSec
-                roadPhase = (roadPhase + laneSpeed) % 1f
             }
 
             delay(16L)
@@ -273,7 +263,7 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 5. 위치 주소 변환 (200m 이동 시 갱신)
+    // 5. 위치 주소 변환 (시/구/동·도로명까지 표시, 200m 이동 시 갱신)
     LaunchedEffect(lastLocation) {
         val loc = lastLocation ?: return@LaunchedEffect
         val prevGeo = lastGeocodedLocation
@@ -288,8 +278,9 @@ fun TeslaClusterScreen() {
                         val addr = list[0]
                         val admin = addr.adminArea ?: ""
                         val locality = addr.locality ?: addr.subAdminArea ?: ""
-                        val thoroughfare = addr.subLocality ?: addr.thoroughfare ?: ""
-                        currentAddress = listOf(admin, locality, thoroughfare)
+                        val subLocality = addr.subLocality ?: ""
+                        val thoroughfare = addr.thoroughfare ?: ""
+                        currentAddress = listOf(admin, locality, subLocality, thoroughfare)
                             .filter { it.isNotBlank() }
                             .distinct()
                             .joinToString(" ")
@@ -301,24 +292,99 @@ fun TeslaClusterScreen() {
         }
     }
 
-    Box(
+    // 위치 미세 조정용 비율 (화면 크기에 비례)
+    val bgWidthRatio = 0.86f
+    val speedCenterXRatio = 0.168f
+    val speedCenterYRatio = 0.56f
+    val carCenterXRatio = 0.555f
+    val carCenterYRatio = 0.67f
+
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF000000))
     ) {
-        Model3DrivingCanvas(
-            speed = smoothSpeedKmh,
-            roadPhase = roadPhase,
-            modifier = Modifier.fillMaxSize()
+        val screenW = maxWidth
+        val screenH = maxHeight
+
+        // 1) 네온 속도계 + 도로 배경 이미지
+        Image(
+            painter = painterResource(id = R.drawable.bg_hud_road),
+            contentDescription = "HUD Road Background",
+            contentScale = ContentScale.FillBounds,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .fillMaxHeight()
+                .fillMaxWidth(bgWidthRatio)
         )
 
+        // 2) 차량 바닥 그림자 + 테슬라 모델 3 하이랜드 리어뷰 이미지
+        val carWidth = screenW * 0.175f
+        val carHeight = carWidth * 0.68f
+        Box(
+            modifier = Modifier
+                .offset(
+                    x = screenW * carCenterXRatio - carWidth / 2,
+                    y = screenH * carCenterYRatio - carHeight / 2
+                )
+                .size(width = carWidth, height = carHeight),
+            contentAlignment = Alignment.Center
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                drawOval(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color.Black.copy(alpha = 0.9f), Color.Transparent),
+                        center = Offset(size.width / 2f, size.height * 0.88f),
+                        radius = size.width * 0.52f
+                    ),
+                    topLeft = Offset(size.width * 0.05f, size.height * 0.72f),
+                    size = Size(size.width * 0.9f, size.height * 0.28f)
+                )
+            }
+            Image(
+                painter = painterResource(id = R.drawable.car_model3),
+                contentDescription = "Tesla Model 3 Highland",
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        // 3) 좌측 속도계 링 중앙 실시간 숫자
+        val speedBoxSize = 150.dp
+        Box(
+            modifier = Modifier
+                .offset(
+                    x = screenW * speedCenterXRatio - speedBoxSize / 2,
+                    y = screenH * speedCenterYRatio - speedBoxSize / 2
+                )
+                .size(speedBoxSize),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = "$displayedSpeedInt",
+                    color = Color.White,
+                    fontSize = 64.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = (-2).sp
+                )
+                Text(
+                    text = "km/h",
+                    color = Color(0xFF94E2F5),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+        }
+
+        // 4) 상단 바 / 우측 Trip A / 하단 주소 UI 오버레이
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 32.dp, vertical = 18.dp),
+                .padding(horizontal = 28.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // 상단 바: 좌측 날짜/시간/배터리, 우측 GPS 상태
+            // 상단 바
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -328,17 +394,17 @@ fun TeslaClusterScreen() {
                     Text(
                         text = currentDateText,
                         color = Color(0xFF22D3EE),
-                        fontSize = 16.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Medium
                     )
-                    Spacer(modifier = Modifier.width(12.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
                     Text(
                         text = currentTimeText,
                         color = Color.White,
-                        fontSize = 18.sp,
+                        fontSize = 17.sp,
                         fontWeight = FontWeight.SemiBold
                     )
-                    Spacer(modifier = Modifier.width(14.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
                     val batColor = when {
                         isCharging -> Color(0xFF22D3EE)
                         batteryPct <= 20 -> Color(0xFFFF5252)
@@ -347,7 +413,7 @@ fun TeslaClusterScreen() {
                     Text(
                         text = if (isCharging) "⚡ $batteryPct%" else "🔋 $batteryPct%",
                         color = batColor,
-                        fontSize = 17.sp,
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
@@ -361,65 +427,37 @@ fun TeslaClusterScreen() {
                                 CircleShape
                             )
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(7.dp))
                     Text(
                         text = if (lastLocation != null) "GPS 연결됨" else "GPS 탐색중",
                         color = Color(0xFF22D3EE),
-                        fontSize = 16.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
             }
 
-            // 중앙 영역: 좌측 세그먼트 속도계, 우측 Trip A 카드
+            // 우측 Trip A 카드
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Box(
-                    modifier = Modifier.size(230.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    SegmentedSpeedGauge(
-                        speed = smoothSpeedKmh,
-                        maxSpeed = 160f,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = "$displayedSpeedInt",
-                            color = Color.White,
-                            fontSize = 72.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = (-1).sp
-                        )
-                        Text(
-                            text = "km/h",
-                            color = Color(0xFFCBD5E1),
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.weight(1f))
-
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
-                        .width(190.dp)
-                        .background(Color(0xE6141820), RoundedCornerShape(18.dp))
-                        .border(1.dp, Color(0xFF262D3B), RoundedCornerShape(18.dp))
+                        .width(175.dp)
+                        .background(Color(0xD910151E), RoundedCornerShape(16.dp))
+                        .border(1.dp, Color(0xFF263142), RoundedCornerShape(16.dp))
                         .clickable { totalDistanceMeters = 0f }
-                        .padding(horizontal = 18.dp, vertical = 18.dp)
+                        .padding(horizontal = 16.dp, vertical = 16.dp)
                 ) {
                     Text(
                         text = "Trip A",
                         color = Color(0xFF22D3EE),
-                        fontSize = 16.sp,
+                        fontSize = 15.sp,
                         fontWeight = FontWeight.Medium
                     )
                     Spacer(modifier = Modifier.height(6.dp))
@@ -427,23 +465,23 @@ fun TeslaClusterScreen() {
                         Text(
                             text = String.format(Locale.US, "%.1f", totalDistanceMeters / 1000f),
                             color = Color.White,
-                            fontSize = 36.sp,
+                            fontSize = 34.sp,
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.width(4.dp))
                         Text(
                             text = "km",
                             color = Color(0xFFCBD5E1),
-                            fontSize = 17.sp,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(bottom = 5.dp)
+                            modifier = Modifier.padding(bottom = 4.dp)
                         )
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         text = "(터치하여 초기화)",
                         color = Color(0xFF94A3B8),
-                        fontSize = 12.sp
+                        fontSize = 11.sp
                     )
                 }
             }
@@ -457,7 +495,7 @@ fun TeslaClusterScreen() {
                 Text(
                     text = if (hasLocationPermission) "📍 $currentAddress" else "📍 위치 권한을 허용해주세요",
                     color = Color(0xFF94A3B8),
-                    fontSize = 14.sp,
+                    fontSize = 13.sp,
                     fontWeight = FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -465,372 +503,4 @@ fun TeslaClusterScreen() {
             }
         }
     }
-}
-
-@Composable
-fun SegmentedSpeedGauge(
-    speed: Float,
-    maxSpeed: Float,
-    modifier: Modifier = Modifier
-) {
-    Canvas(modifier = modifier) {
-        val cx = size.width / 2f
-        val cy = size.height / 2f
-        val outerR = size.minDimension * 0.46f
-        val innerR = outerR - 14.dp.toPx()
-
-        val startDeg = 135f
-        val totalSweep = 270f
-        val tickCount = 36
-        val progress = (speed / maxSpeed).coerceIn(0f, 1f)
-        val activeTicks = (tickCount * progress).roundToInt()
-
-        for (i in 0..tickCount) {
-            val t = i.toFloat() / tickCount
-            val deg = startDeg + totalSweep * t
-            val rad = deg * PI / 180.0
-            val cosA = cos(rad).toFloat()
-            val sinA = sin(rad).toFloat()
-
-            val tickStartR = if (i % 6 == 0) innerR - 4.dp.toPx() else innerR
-            val p1 = Offset(cx + cosA * tickStartR, cy + sinA * tickStartR)
-            val p2 = Offset(cx + cosA * outerR, cy + sinA * outerR)
-
-            val isLit = i <= activeTicks
-            val tickColor = when {
-                !isLit -> Color(0xFF1E293B).copy(alpha = 0.65f)
-                t > 0.78f -> Color(0xFFE0F2FE)
-                t > 0.45f -> Color(0xFF38BDF8)
-                else -> Color(0xFF06B6D4)
-            }
-
-            drawLine(
-                color = tickColor,
-                start = p1,
-                end = p2,
-                strokeWidth = if (i % 6 == 0) 3.5.dp.toPx() else 2.2.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-        }
-
-        // 외곽 글로우 링
-        drawArc(
-            brush = Brush.sweepGradient(
-                0.0f to Color(0xFF0284C7).copy(alpha = 0.2f),
-                0.35f to Color(0xFF22D3EE),
-                0.7f to Color(0xFFBAE6FD),
-                1.0f to Color(0xFF0284C7).copy(alpha = 0.2f)
-            ),
-            startAngle = startDeg,
-            sweepAngle = totalSweep * progress.coerceAtLeast(0.08f),
-            useCenter = false,
-            topLeft = Offset(cx - outerR - 5.dp.toPx(), cy - outerR - 5.dp.toPx()),
-            size = Size((outerR + 5.dp.toPx()) * 2f, (outerR + 5.dp.toPx()) * 2f),
-            style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
-        )
-
-        // 활성 끝점 스파클 하이라이트
-        val tipDeg = startDeg + totalSweep * progress
-        val tipRad = tipDeg * PI / 180.0
-        val tipX = cx + cos(tipRad).toFloat() * ((innerR + outerR) / 2f)
-        val tipY = cy + sin(tipRad).toFloat() * ((innerR + outerR) / 2f)
-
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(Color.White, Color(0xFF67E8F9).copy(alpha = 0.5f), Color.Transparent),
-                center = Offset(tipX, tipY),
-                radius = 22.dp.toPx()
-            ),
-            center = Offset(tipX, tipY),
-            radius = 22.dp.toPx()
-        )
-
-        rotate(degrees = 45f, pivot = Offset(tipX, tipY)) {
-            drawLine(
-                color = Color.White,
-                start = Offset(tipX - 11.dp.toPx(), tipY),
-                end = Offset(tipX + 11.dp.toPx(), tipY),
-                strokeWidth = 2.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-            drawLine(
-                color = Color.White,
-                start = Offset(tipX, tipY - 11.dp.toPx()),
-                end = Offset(tipX, tipY + 11.dp.toPx()),
-                strokeWidth = 2.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-        }
-    }
-}
-
-@Composable
-fun Model3DrivingCanvas(
-    speed: Float,
-    roadPhase: Float,
-    modifier: Modifier = Modifier
-) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val cx = w * 0.5f
-        val horizonY = h * 0.14f
-        val bottomY = h * 0.96f
-
-        // 중앙 시안 조명 글로우
-        drawCircle(
-            brush = Brush.radialGradient(
-                colors = listOf(
-                    Color(0xFF0E7490).copy(alpha = 0.34f),
-                    Color(0xFF082F49).copy(alpha = 0.14f),
-                    Color.Transparent
-                ),
-                center = Offset(cx, h * 0.52f),
-                radius = w * 0.34f
-            ),
-            center = Offset(cx, h * 0.52f),
-            radius = w * 0.34f
-        )
-
-        val outerTopW = w * 0.045f
-        val outerBotW = w * 0.25f
-
-        val roadPath = Path().apply {
-            moveTo(cx - outerTopW, horizonY)
-            lineTo(cx + outerTopW, horizonY)
-            lineTo(cx + outerBotW, bottomY)
-            lineTo(cx - outerBotW, bottomY)
-            close()
-        }
-        drawPath(
-            path = roadPath,
-            brush = Brush.verticalGradient(
-                colors = listOf(Color(0xFF06131F), Color(0xFF0C2235), Color(0xFF071320)),
-                startY = horizonY,
-                endY = bottomY
-            )
-        )
-
-        // 3차선 구획선 (외곽 2줄 + 내부 2줄)
-        val laneRatios = listOf(-1.0f, -0.33f, 0.33f, 1.0f)
-        for (ratio in laneRatios) {
-            val topX = cx + outerTopW * ratio
-            val botX = cx + outerBotW * ratio
-            val isOuter = abs(ratio) > 0.9f
-
-            drawLine(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color.Transparent,
-                        Color(0xFF22D3EE).copy(alpha = if (isOuter) 0.95f else 0.72f),
-                        Color(0xFF67E8F9).copy(alpha = if (isOuter) 1.0f else 0.82f)
-                    ),
-                    startY = horizonY,
-                    endY = bottomY
-                ),
-                start = Offset(topX, horizonY),
-                end = Offset(botX, bottomY),
-                strokeWidth = if (isOuter) 4.dp.toPx() else 2.2.dp.toPx()
-            )
-        }
-
-        // 속도 연동 이동 마커
-        val markerCount = 5
-        for (i in 0 until markerCount) {
-            val tStart = ((i + roadPhase) / markerCount).coerceIn(0f, 1f)
-            val tEnd = (tStart + 0.06f).coerceAtMost(1f)
-            val p1 = tStart * tStart
-            val p2 = tEnd * tEnd
-            val y1 = horizonY + (bottomY - horizonY) * p1
-            val y2 = horizonY + (bottomY - horizonY) * p2
-            if (y2 > y1) {
-                drawLine(
-                    color = Color(0xFF67E8F9).copy(alpha = 0.15f + 0.45f * p1),
-                    start = Offset(cx, y1),
-                    end = Offset(cx, y2),
-                    strokeWidth = (1.5f + 2f * p1).dp.toPx(),
-                    cap = StrokeCap.Round
-                )
-            }
-        }
-
-        drawModel3RearPerspective(
-            cx = cx,
-            baseY = h * 0.74f,
-            scale = (h / 420f).coerceIn(0.8f, 1.35f),
-            speed = speed
-        )
-    }
-}
-
-private fun DrawScope.drawModel3RearPerspective(
-    cx: Float,
-    baseY: Float,
-    scale: Float,
-    speed: Float
-) {
-    val carW = 138f * scale
-    val carH = 82f * scale
-
-    // 전방 헤드라이트 빛 퍼짐
-    val leftBeam = Path().apply {
-        moveTo(cx - carW * 0.32f, baseY - carH * 0.62f)
-        lineTo(cx - carW * 0.95f, baseY - carH * 1.45f)
-        lineTo(cx - carW * 0.25f, baseY - carH * 1.45f)
-        close()
-    }
-    val rightBeam = Path().apply {
-        moveTo(cx + carW * 0.32f, baseY - carH * 0.62f)
-        lineTo(cx + carW * 0.95f, baseY - carH * 1.45f)
-        lineTo(cx + carW * 0.25f, baseY - carH * 1.45f)
-        close()
-    }
-    drawPath(
-        path = leftBeam,
-        brush = Brush.radialGradient(
-            colors = listOf(Color(0xFFE0F2FE).copy(alpha = 0.34f), Color.Transparent),
-            center = Offset(cx - carW * 0.55f, baseY - carH * 1.0f),
-            radius = carW * 0.75f
-        )
-    )
-    drawPath(
-        path = rightBeam,
-        brush = Brush.radialGradient(
-            colors = listOf(Color(0xFFE0F2FE).copy(alpha = 0.34f), Color.Transparent),
-            center = Offset(cx + carW * 0.55f, baseY - carH * 1.0f),
-            radius = carW * 0.75f
-        )
-    )
-
-    // 바닥 그림자
-    drawOval(
-        color = Color.Black.copy(alpha = 0.85f),
-        topLeft = Offset(cx - carW * 0.58f, baseY - 8f * scale),
-        size = Size(carW * 1.16f, 22f * scale)
-    )
-
-    // 타이어
-    val tireW = 22f * scale
-    val tireH = 22f * scale
-    drawRoundRect(
-        color = Color(0xFF0F172A),
-        topLeft = Offset(cx - carW * 0.45f, baseY - tireH * 0.65f),
-        size = Size(tireW, tireH),
-        cornerRadius = CornerRadius(5f * scale, 5f * scale)
-    )
-    drawRoundRect(
-        color = Color(0xFF0F172A),
-        topLeft = Offset(cx + carW * 0.45f - tireW, baseY - tireH * 0.65f),
-        size = Size(tireW, tireH),
-        cornerRadius = CornerRadius(5f * scale, 5f * scale)
-    )
-
-    // 하단 디퓨저
-    val diffuserPath = Path().apply {
-        moveTo(cx - carW * 0.40f, baseY - 2f * scale)
-        lineTo(cx + carW * 0.40f, baseY - 2f * scale)
-        lineTo(cx + carW * 0.35f, baseY - carH * 0.15f)
-        lineTo(cx - carW * 0.35f, baseY - carH * 0.15f)
-        close()
-    }
-    drawPath(path = diffuserPath, color = Color(0xFF1E293B))
-
-    // 화이트 차체 후면
-    val bodyPath = Path().apply {
-        moveTo(cx - carW * 0.47f, baseY - carH * 0.12f)
-        quadraticBezierTo(cx - carW * 0.50f, baseY - carH * 0.46f, cx - carW * 0.37f, baseY - carH * 0.55f)
-        lineTo(cx + carW * 0.37f, baseY - carH * 0.55f)
-        quadraticBezierTo(cx + carW * 0.50f, baseY - carH * 0.46f, cx + carW * 0.47f, baseY - carH * 0.12f)
-        close()
-    }
-    drawPath(
-        path = bodyPath,
-        brush = Brush.verticalGradient(
-            colors = listOf(Color(0xFFFFFFFF), Color(0xFFE2E8F0), Color(0xFF94A3B8)),
-            startY = baseY - carH * 0.55f,
-            endY = baseY - carH * 0.12f
-        )
-    )
-
-    // 사이드미러
-    drawRoundRect(
-        color = Color(0xFFE2E8F0),
-        topLeft = Offset(cx - carW * 0.51f, baseY - carH * 0.62f),
-        size = Size(14f * scale, 8f * scale),
-        cornerRadius = CornerRadius(3f * scale, 3f * scale)
-    )
-    drawRoundRect(
-        color = Color(0xFFE2E8F0),
-        topLeft = Offset(cx + carW * 0.51f - 14f * scale, baseY - carH * 0.62f),
-        size = Size(14f * scale, 8f * scale),
-        cornerRadius = CornerRadius(3f * scale, 3f * scale)
-    )
-
-    // 루프 및 글라스 루프
-    val cabinPath = Path().apply {
-        moveTo(cx - carW * 0.36f, baseY - carH * 0.54f)
-        lineTo(cx - carW * 0.24f, baseY - carH * 0.95f)
-        quadraticBezierTo(cx, baseY - carH * 1.02f, cx + carW * 0.24f, baseY - carH * 0.95f)
-        lineTo(cx + carW * 0.36f, baseY - carH * 0.54f)
-        close()
-    }
-    drawPath(
-        path = cabinPath,
-        brush = Brush.verticalGradient(
-            colors = listOf(Color(0xFFF1F5F9), Color(0xFFCBD5E1)),
-            startY = baseY - carH * 1.0f,
-            endY = baseY - carH * 0.54f
-        )
-    )
-
-    val rearGlassPath = Path().apply {
-        moveTo(cx - carW * 0.30f, baseY - carH * 0.56f)
-        lineTo(cx - carW * 0.20f, baseY - carH * 0.90f)
-        quadraticBezierTo(cx, baseY - carH * 0.95f, cx + carW * 0.20f, baseY - carH * 0.90f)
-        lineTo(cx + carW * 0.30f, baseY - carH * 0.56f)
-        close()
-    }
-    drawPath(
-        path = rearGlassPath,
-        brush = Brush.verticalGradient(
-            colors = listOf(Color(0xFF0F172A), Color(0xFF1E293B)),
-            startY = baseY - carH * 0.95f,
-            endY = baseY - carH * 0.56f
-        )
-    )
-
-    // C자형 테일램프 (하이랜드 스타일)
-    val tailColor = if (speed <= 1.5f) Color(0xFFFF1744) else Color(0xFFEF4444)
-    val leftTail = Path().apply {
-        moveTo(cx - carW * 0.42f, baseY - carH * 0.43f)
-        lineTo(cx - carW * 0.24f, baseY - carH * 0.43f)
-        lineTo(cx - carW * 0.24f, baseY - carH * 0.38f)
-        lineTo(cx - carW * 0.39f, baseY - carH * 0.38f)
-        lineTo(cx - carW * 0.39f, baseY - carH * 0.32f)
-        lineTo(cx - carW * 0.26f, baseY - carH * 0.32f)
-        lineTo(cx - carW * 0.26f, baseY - carH * 0.28f)
-        lineTo(cx - carW * 0.42f, baseY - carH * 0.28f)
-        close()
-    }
-    val rightTail = Path().apply {
-        moveTo(cx + carW * 0.42f, baseY - carH * 0.43f)
-        lineTo(cx + carW * 0.24f, baseY - carH * 0.43f)
-        lineTo(cx + carW * 0.24f, baseY - carH * 0.38f)
-        lineTo(cx + carW * 0.39f, baseY - carH * 0.38f)
-        lineTo(cx + carW * 0.39f, baseY - carH * 0.32f)
-        lineTo(cx + carW * 0.26f, baseY - carH * 0.32f)
-        lineTo(cx + carW * 0.26f, baseY - carH * 0.28f)
-        lineTo(cx + carW * 0.42f, baseY - carH * 0.28f)
-        close()
-    }
-    drawPath(path = leftTail, color = tailColor)
-    drawPath(path = rightTail, color = tailColor)
-
-    // 후방 번호판 영역
-    drawRoundRect(
-        color = Color(0xFFE2E8F0),
-        topLeft = Offset(cx - 17f * scale, baseY - carH * 0.33f),
-        size = Size(34f * scale, 10f * scale),
-        cornerRadius = CornerRadius(2f * scale, 2f * scale)
-    )
 }

@@ -26,6 +26,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +38,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -53,7 +56,7 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.abs
 import kotlin.math.exp
-import kotlin.math.roundToInt
+import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -100,9 +103,16 @@ class MainActivity : ComponentActivity() {
 fun TeslaClusterScreen() {
     val context = LocalContext.current
 
-    var targetSpeedKmh by remember { mutableFloatStateOf(0f) }
+    var gpsSpeedKmh by remember { mutableFloatStateOf(0f) }
+    var isTestDriving by remember { mutableStateOf(false) }
+    var testSpeedKmh by remember { mutableFloatStateOf(0f) }
+    var testAccelerating by remember { mutableStateOf(true) }
+
     var smoothSpeedKmh by remember { mutableFloatStateOf(0f) }
     var displayedSpeedInt by remember { mutableIntStateOf(0) }
+    var roadScrollPhase by remember { mutableFloatStateOf(0f) }
+    var elapsedSec by remember { mutableFloatStateOf(0f) }
+
     var totalDistanceMeters by remember { mutableFloatStateOf(0f) }
     var lastLocation by remember { mutableStateOf<Location?>(null) }
     var currentAddress by remember { mutableStateOf("위치 수신 대기 중...") }
@@ -149,34 +159,66 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 2. 60fps 프레임 루프: 부드러운 속도 보간 & 1씩 자연스러운 숫자 변경
+    // 2. 60fps 루프: 테스트 주행 속도 생성 + 부드러운 속도 보간 + 1씩 순차 숫자 변경 + 전진 도로 흐름
     LaunchedEffect(Unit) {
         var lastFrameNs = System.nanoTime()
+        var digitStepAccumSec = 0f
+
         while (true) {
             val nowNs = System.nanoTime()
             val dtSec = ((nowNs - lastFrameNs) / 1_000_000_000.0).toFloat().coerceIn(0.001f, 0.05f)
             lastFrameNs = nowNs
+            elapsedSec += dtSec
 
-            val clampedTarget = targetSpeedKmh.coerceIn(0f, 200f)
+            // 속도계 터치 시 테스트 속도 0 -> 130 -> 0 왕복 시뮬레이션
+            if (isTestDriving) {
+                val rate = if (testAccelerating) 24f else 28f
+                if (testAccelerating) {
+                    testSpeedKmh = (testSpeedKmh + rate * dtSec).coerceAtMost(130f)
+                    if (testSpeedKmh >= 130f) testAccelerating = false
+                } else {
+                    testSpeedKmh = (testSpeedKmh - rate * dtSec).coerceAtLeast(0f)
+                    if (testSpeedKmh <= 0f) testAccelerating = true
+                }
+            } else {
+                testSpeedKmh = 0f
+            }
+
+            val rawTarget = if (isTestDriving) testSpeedKmh else gpsSpeedKmh
+            val clampedTarget = rawTarget.coerceIn(0f, 200f)
+
+            // 게이지/모션용 연속 보간 속도
             val diff = clampedTarget - smoothSpeedKmh
-
-            if (abs(diff) < 0.02f) {
+            if (abs(diff) < 0.01f) {
                 smoothSpeedKmh = clampedTarget
             } else {
-                val alpha = (1f - exp(-7.5f * dtSec)).coerceIn(0f, 1f)
+                val alpha = (1f - exp(-6.5f * dtSec)).coerceIn(0f, 1f)
                 smoothSpeedKmh += diff * alpha
             }
 
-            val roundedTarget = smoothSpeedKmh.roundToInt()
-            when {
-                displayedSpeedInt < roundedTarget -> {
-                    val step = if (roundedTarget - displayedSpeedInt > 15) 2 else 1
-                    displayedSpeedInt = (displayedSpeedInt + step).coerceAtMost(roundedTarget)
+            // 숫자가 멈칫하지 않고 1씩 일정 간격으로 착착 올라가거나 내려가도록 처리
+            val desiredInt = clampedTarget.toInt()
+            if (displayedSpeedInt != desiredInt) {
+                // 속도가 빠르거나 차이가 클수록 1씩 넘어가는 간격을 살짝 단축 (최소 ~22ms, 기본 ~55ms)
+                val stepInterval = (0.060f - (abs(desiredInt - displayedSpeedInt).coerceAtMost(40) * 0.0009f))
+                    .coerceIn(0.022f, 0.060f)
+                digitStepAccumSec += dtSec
+                while (digitStepAccumSec >= stepInterval && displayedSpeedInt != desiredInt) {
+                    digitStepAccumSec -= stepInterval
+                    if (displayedSpeedInt < desiredInt) {
+                        displayedSpeedInt += 1
+                    } else {
+                        displayedSpeedInt -= 1
+                    }
                 }
-                displayedSpeedInt > roundedTarget -> {
-                    val step = if (displayedSpeedInt - roundedTarget > 15) 2 else 1
-                    displayedSpeedInt = (displayedSpeedInt - step).coerceAtLeast(roundedTarget)
-                }
+            } else {
+                digitStepAccumSec = 0f
+            }
+
+            // 속도에 비례해 전진하는 도로 라인 흐름
+            if (smoothSpeedKmh > 0.5f) {
+                val flowRate = (smoothSpeedKmh / 42f) * dtSec
+                roadScrollPhase = (roadScrollPhase + flowRate) % 1f
             }
 
             delay(16L)
@@ -230,7 +272,7 @@ fun TeslaClusterScreen() {
             override fun onLocationResult(result: LocationResult) {
                 val loc = result.lastLocation ?: return
                 val speed = if (loc.hasSpeed()) loc.speed * 3.6f else 0f
-                targetSpeedKmh = if (speed < 1.5f) 0f else speed
+                gpsSpeedKmh = if (speed < 1.5f) 0f else speed
 
                 lastLocation?.let { prev ->
                     if (loc.accuracy < 25f) {
@@ -292,12 +334,17 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 위치 미세 조정용 비율 (화면 크기에 비례)
+    // 위치 미세 조정용 비율
     val bgWidthRatio = 0.86f
     val speedCenterXRatio = 0.168f
     val speedCenterYRatio = 0.56f
     val carCenterXRatio = 0.555f
     val carCenterYRatio = 0.67f
+
+    val speedFactor = (smoothSpeedKmh / 120f).coerceIn(0f, 1.4f)
+    // 속도에 따른 미세 주행 진동 및 앞으로 치고 나가는 느낌의 스케일 변화
+    val carBobY = if (smoothSpeedKmh > 1f) sin(elapsedSec * (14f + speedFactor * 18f)) * (1.2f * speedFactor) else 0f
+    val carSurgeScale = 1f + (speedFactor * 0.025f) + if (smoothSpeedKmh > 1f) sin(elapsedSec * 6f) * (0.004f * speedFactor) else 0f
 
     BoxWithConstraints(
         modifier = Modifier
@@ -318,16 +365,31 @@ fun TeslaClusterScreen() {
                 .fillMaxWidth(bgWidthRatio)
         )
 
-        // 2) 차량 바닥 그림자 + 테슬라 모델 3 하이랜드 리어뷰 이미지
+        // 2) 속도에 비례해 앞으로 달리는 느낌을 주는 도로 모션 스트릭 오버레이
+        ForwardMotionRoadOverlay(
+            speed = smoothSpeedKmh,
+            scrollPhase = roadScrollPhase,
+            carCenterXRatio = carCenterXRatio,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .fillMaxHeight()
+                .fillMaxWidth(bgWidthRatio)
+        )
+
+        // 3) 차량 바닥 그림자 + 테슬라 모델 3 하이랜드 리어뷰 (전진 모션 적용)
         val carWidth = screenW * 0.175f
         val carHeight = carWidth * 0.68f
         Box(
             modifier = Modifier
                 .offset(
                     x = screenW * carCenterXRatio - carWidth / 2,
-                    y = screenH * carCenterYRatio - carHeight / 2
+                    y = screenH * carCenterYRatio - carHeight / 2 + carBobY.dp
                 )
-                .size(width = carWidth, height = carHeight),
+                .size(width = carWidth, height = carHeight)
+                .graphicsLayer {
+                    scaleX = carSurgeScale
+                    scaleY = carSurgeScale
+                },
             contentAlignment = Alignment.Center
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
@@ -349,15 +411,27 @@ fun TeslaClusterScreen() {
             )
         }
 
-        // 3) 좌측 속도계 링 중앙 실시간 숫자
-        val speedBoxSize = 150.dp
+        // 4) 좌측 속도계 링 중앙 실시간 숫자 (터치 시 테스트 주행 토글)
+        val speedBoxSize = 154.dp
         Box(
             modifier = Modifier
                 .offset(
                     x = screenW * speedCenterXRatio - speedBoxSize / 2,
                     y = screenH * speedCenterYRatio - speedBoxSize / 2
                 )
-                .size(speedBoxSize),
+                .size(speedBoxSize)
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    if (!isTestDriving) {
+                        testSpeedKmh = displayedSpeedInt.toFloat()
+                        testAccelerating = true
+                        isTestDriving = true
+                    } else {
+                        isTestDriving = false
+                    }
+                },
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -369,15 +443,15 @@ fun TeslaClusterScreen() {
                     letterSpacing = (-2).sp
                 )
                 Text(
-                    text = "km/h",
-                    color = Color(0xFF94E2F5),
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium
+                    text = if (isTestDriving) "TEST" else "km/h",
+                    color = if (isTestDriving) Color(0xFF00E676) else Color(0xFF94E2F5),
+                    fontSize = 15.sp,
+                    fontWeight = if (isTestDriving) FontWeight.Bold else FontWeight.Medium
                 )
             }
         }
 
-        // 4) 상단 바 / 우측 Trip A / 하단 주소 UI 오버레이
+        // 5) 상단 바 / 우측 Trip A / 하단 주소 UI 오버레이
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -499,6 +573,58 @@ fun TeslaClusterScreen() {
                     fontWeight = FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ForwardMotionRoadOverlay(
+    speed: Float,
+    scrollPhase: Float,
+    carCenterXRatio: Float,
+    modifier: Modifier = Modifier
+) {
+    if (speed <= 0.5f) return
+
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val intensity = (speed / 120f).coerceIn(0.08f, 1.35f)
+
+        // 도로 원근 구간의 대략적인 X 중심 정렬 (전체 화면 기준 carCenterXRatio 보정)
+        val roadCenterX = w * (carCenterXRatio / 0.86f).coerceIn(0.45f, 0.72f)
+        val topY = h * 0.24f
+        val botY = h * 0.95f
+
+        val streakCount = 8
+        val laneOffsets = listOf(-0.22f, -0.07f, 0.07f, 0.22f)
+
+        for (i in 0 until streakCount) {
+            val rawT = ((i.toFloat() / streakCount) + scrollPhase) % 1f
+            // 원근감: 아래쪽(가까운 쪽)으로 갈수록 빠르게 넓어지며 지나감
+            val pStart = rawT * rawT
+            val streakLen = (0.035f + 0.045f * intensity) * (0.4f + rawT)
+            val pEnd = (rawT + streakLen).coerceAtMost(1f).let { it * it }
+
+            val y1 = topY + (botY - topY) * pStart
+            val y2 = topY + (botY - topY) * pEnd
+            if (y2 <= y1) continue
+
+            val spreadScale = 0.25f + 1.35f * pStart
+            val alpha = ((0.18f + 0.42f * pStart) * intensity).coerceIn(0f, 0.75f)
+            val strokeW = ((1.2f + 2.4f * pStart) * (0.7f + 0.4f * intensity)).dp.toPx()
+
+            for (lane in laneOffsets) {
+                val x1 = roadCenterX + w * lane * spreadScale
+                val x2 = roadCenterX + w * lane * (0.25f + 1.35f * pEnd)
+                drawLine(
+                    color = Color(0xFF67E8F9).copy(alpha = alpha),
+                    start = Offset(x1, y1),
+                    end = Offset(x2, y2),
+                    strokeWidth = strokeW,
+                    cap = StrokeCap.Round
                 )
             }
         }

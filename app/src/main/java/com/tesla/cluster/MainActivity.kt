@@ -67,11 +67,11 @@ import kotlin.math.exp
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-enum class WeatherType(val label: String, val icon: String) {
-    CLEAR("맑음", "☀️"),
-    CLOUDY("구름", "☁️"),
-    RAIN("비", "🌧️"),
-    SNOW("눈", "❄️")
+enum class WeatherType(val label: String, val dayIcon: String, val nightIcon: String) {
+    CLEAR("맑음", "☀️", "🌕"),
+    CLOUDY("구름", "☁️", "☁️"),
+    RAIN("비", "🌧️", "🌧️"),
+    SNOW("눈", "❄️", "❄️")
 }
 
 class MainActivity : ComponentActivity() {
@@ -138,13 +138,21 @@ fun TeslaClusterScreen() {
     var batteryPct by remember { mutableIntStateOf(88) }
     var isCharging by remember { mutableStateOf(true) }
 
-    // 날씨 상태 (실시간 + 수동 테스트 오버라이드)
+    // 대분류(낮/밤) + 소분류(날씨) 상태 및 수동 테스트 오버라이드
+    val initialIsDay = remember {
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        hour in 6..18
+    }
+    var liveIsDay by remember { mutableStateOf(initialIsDay) }
+    var manualIsDay by remember { mutableStateOf<Boolean?>(null) }
+
     var liveWeather by remember { mutableStateOf(WeatherType.CLEAR) }
     var manualWeather by remember { mutableStateOf<WeatherType?>(null) }
     var temperatureC by remember { mutableStateOf<Int?>(null) }
     var lastWeatherLocation by remember { mutableStateOf<Location?>(null) }
     var lastWeatherFetchMs by remember { mutableLongStateOf(0L) }
 
+    val activeIsDay = manualIsDay ?: liveIsDay
     val activeWeather = manualWeather ?: liveWeather
 
     var hasLocationPermission by remember {
@@ -184,7 +192,7 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 2. 60fps 루프: 테스트 주행(0~200) + 부드러운 속도 보간 + 1씩 순차 숫자 변경 + 전진 도로/날씨 애니메이션
+    // 2. 60fps 루프: 테스트 주행(0~200) + 부드러운 속도 보간 + 1씩 순차 숫자 변경 + 도로/날씨 모션
     LaunchedEffect(Unit) {
         var lastFrameNs = System.nanoTime()
         var digitStepAccumSec = 0f
@@ -354,7 +362,7 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 6. 실시간 날씨 조회 (Open-Meteo 무료 API, 15분 또는 5km 이동 시 갱신)
+    // 6. 실시간 날씨 + 낮/밤 조회 (Open-Meteo 무료 API, 15분 또는 5km 이동 시 갱신)
     LaunchedEffect(lastLocation) {
         val loc = lastLocation ?: return@LaunchedEffect
         val nowMs = System.currentTimeMillis()
@@ -379,8 +387,10 @@ fun TeslaClusterScreen() {
                         val current = JSONObject(body).getJSONObject("current_weather")
                         val temp = current.getDouble("temperature").roundToInt()
                         val code = current.getInt("weathercode")
+                        val isDayFlag = current.optInt("is_day", if (initialIsDay) 1 else 0)
                         temperatureC = temp
                         liveWeather = mapWeatherCode(code)
+                        liveIsDay = (isDayFlag == 1)
                     }
                     conn.disconnect()
                 } catch (_: Exception) {
@@ -407,14 +417,15 @@ fun TeslaClusterScreen() {
         val screenW = maxWidth
         val screenH = maxHeight
 
-        // 0) 실시간 날씨 연동 하늘 배경 (맑음/구름/비/눈)
+        // 0) 대분류(낮/밤) + 소분류(맑음/구름/비/눈) 하늘 배경
         WeatherSkyBackground(
             weather = activeWeather,
+            isDay = activeIsDay,
             elapsedSec = elapsedSec,
             modifier = Modifier.fillMaxSize()
         )
 
-        // 1) 네온 시안 속도계 + 도로 오버레이 (BlendMode.Screen으로 검정 배경을 투명 합성)
+        // 1) 네온 시안 속도계 + 도로 오버레이 (검정 배경 투명 합성)
         Canvas(
             modifier = Modifier
                 .align(Alignment.CenterStart)
@@ -449,7 +460,7 @@ fun TeslaClusterScreen() {
                 .fillMaxWidth(bgWidthRatio)
         )
 
-        // 4) 차량 바닥 그림자 + 테슬라 모델 3 하이랜드 리어뷰 (도로 중심축에 고정)
+        // 4) 차량 바닥 그림자 + 테슬라 모델 3 하이랜드 리어뷰
         val carWidth = screenW * 0.175f
         val carHeight = carWidth * 0.68f
         Box(
@@ -480,10 +491,11 @@ fun TeslaClusterScreen() {
             )
         }
 
-        // 4-1) 비/눈 전경 파티클 효과 (속도에 따라 빗줄기 각도 반응)
+        // 4-1) 비/눈 전경 파티클 효과
         if (activeWeather == WeatherType.RAIN || activeWeather == WeatherType.SNOW) {
             WeatherPrecipitationOverlay(
                 weather = activeWeather,
+                isDay = activeIsDay,
                 speed = smoothSpeedKmh,
                 elapsedSec = elapsedSec,
                 modifier = Modifier.fillMaxSize()
@@ -571,10 +583,37 @@ fun TeslaClusterScreen() {
                     )
                 }
 
-                // 우측 상단: 날씨 표시(터치로 맑음/구름/비/눈 테스트 가능) + GPS 상태
+                // 우측 상단: [낮/밤 토글] + [날씨 토글] + GPS 상태
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val dayNightLabel = if (activeIsDay) "☀️ 낮" else "🌙 밤"
+                    val dayNightTag = if (manualIsDay != null) "*" else ""
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .background(Color(0x990F172A), RoundedCornerShape(12.dp))
+                            .border(1.dp, Color(0x5538BDF8), RoundedCornerShape(12.dp))
+                            .clickable {
+                                manualIsDay = when (manualIsDay) {
+                                    null -> !liveIsDay
+                                    true -> false
+                                    false -> null
+                                }
+                            }
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "$dayNightLabel$dayNightTag",
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(6.dp))
+
+                    val weatherIcon = if (activeIsDay) activeWeather.dayIcon else activeWeather.nightIcon
                     val tempText = temperatureC?.let { " ${it}°C" } ?: ""
-                    val modeTag = if (manualWeather != null) " (TEST)" else ""
+                    val weatherTag = if (manualWeather != null) "*" else ""
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
@@ -589,17 +628,17 @@ fun TeslaClusterScreen() {
                                     WeatherType.SNOW -> null
                                 }
                             }
-                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = "${activeWeather.icon} ${activeWeather.label}$tempText$modeTag",
+                            text = "$weatherIcon ${activeWeather.label}$tempText$weatherTag",
                             color = Color.White,
-                            fontSize = 14.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
                         )
                     }
 
-                    Spacer(modifier = Modifier.width(12.dp))
+                    Spacer(modifier = Modifier.width(10.dp))
 
                     Box(
                         modifier = Modifier
@@ -609,11 +648,11 @@ fun TeslaClusterScreen() {
                                 CircleShape
                             )
                     )
-                    Spacer(modifier = Modifier.width(7.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = if (lastLocation != null) "GPS 연결됨" else "GPS 탐색중",
+                        text = if (lastLocation != null) "GPS" else "탐색중",
                         color = Color(0xFF22D3EE),
-                        fontSize = 15.sp,
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
@@ -697,6 +736,7 @@ private fun mapWeatherCode(code: Int): WeatherType = when (code) {
 @Composable
 fun WeatherSkyBackground(
     weather: WeatherType,
+    isDay: Boolean,
     elapsedSec: Float,
     modifier: Modifier = Modifier
 ) {
@@ -705,31 +745,61 @@ fun WeatherSkyBackground(
         val h = size.height
         val horizonY = h * 0.48f
 
-        val skyColors = when (weather) {
-            WeatherType.CLEAR -> listOf(
-                Color(0xFF0A3D7A),
-                Color(0xFF1A6BB5),
-                Color(0xFF071A30),
-                Color(0xFF000000)
-            )
-            WeatherType.CLOUDY -> listOf(
-                Color(0xFF2B3544),
-                Color(0xFF3E4C5E),
-                Color(0xFF141B24),
-                Color(0xFF000000)
-            )
-            WeatherType.RAIN -> listOf(
-                Color(0xFF141B26),
-                Color(0xFF233042),
-                Color(0xFF0C121A),
-                Color(0xFF000000)
-            )
-            WeatherType.SNOW -> listOf(
-                Color(0xFF283747),
-                Color(0xFF425466),
-                Color(0xFF131B24),
-                Color(0xFF000000)
-            )
+        // 대분류(낮/밤) × 소분류(맑음/구름/비/눈) 하늘 색상 팔레트
+        val skyColors = if (isDay) {
+            when (weather) {
+                WeatherType.CLEAR -> listOf(
+                    Color(0xFF1565C0),
+                    Color(0xFF42A5F5),
+                    Color(0xFF0D2E54),
+                    Color(0xFF000000)
+                )
+                WeatherType.CLOUDY -> listOf(
+                    Color(0xFF4B5E70),
+                    Color(0xFF6B7F91),
+                    Color(0xFF212B36),
+                    Color(0xFF000000)
+                )
+                WeatherType.RAIN -> listOf(
+                    Color(0xFF2C3845),
+                    Color(0xFF404F5E),
+                    Color(0xFF151C24),
+                    Color(0xFF000000)
+                )
+                WeatherType.SNOW -> listOf(
+                    Color(0xFF546A7B),
+                    Color(0xFF7B90A0),
+                    Color(0xFF1E2933),
+                    Color(0xFF000000)
+                )
+            }
+        } else {
+            when (weather) {
+                WeatherType.CLEAR -> listOf(
+                    Color(0xFF040A17),
+                    Color(0xFF0C1B36),
+                    Color(0xFF050A14),
+                    Color(0xFF000000)
+                )
+                WeatherType.CLOUDY -> listOf(
+                    Color(0xFF0C121D),
+                    Color(0xFF1A2433),
+                    Color(0xFF070B12),
+                    Color(0xFF000000)
+                )
+                WeatherType.RAIN -> listOf(
+                    Color(0xFF070B12),
+                    Color(0xFF121A26),
+                    Color(0xFF04060A),
+                    Color(0xFF000000)
+                )
+                WeatherType.SNOW -> listOf(
+                    Color(0xFF0E1724),
+                    Color(0xFF1E2C3D),
+                    Color(0xFF080D14),
+                    Color(0xFF000000)
+                )
+            }
         }
 
         drawRect(
@@ -745,55 +815,129 @@ fun WeatherSkyBackground(
             )
         )
 
-        when (weather) {
-            WeatherType.CLEAR -> {
-                // 도로 지평선 위쪽 태양 + 은은한 후광
-                val sunCenter = Offset(w * 0.62f, h * 0.17f)
-                val pulse = 1f + sin(elapsedSec * 1.5f) * 0.04f
-                drawCircle(
-                    brush = Brush.radialGradient(
-                        colors = listOf(
-                            Color(0xFFFFF7CC).copy(alpha = 0.95f),
-                            Color(0xFFFFD54F).copy(alpha = 0.50f),
-                            Color(0xFF38BDF8).copy(alpha = 0.15f),
-                            Color.Transparent
+        if (isDay) {
+            // [낮] 맑음 -> 태양 / 흐림·비·눈 -> 낮 구름
+            when (weather) {
+                WeatherType.CLEAR -> {
+                    val sunCenter = Offset(w * 0.62f, h * 0.17f)
+                    val pulse = 1f + sin(elapsedSec * 1.5f) * 0.04f
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color(0xFFFFF9C4).copy(alpha = 0.98f),
+                                Color(0xFFFFD54F).copy(alpha = 0.55f),
+                                Color(0xFF64B5F6).copy(alpha = 0.18f),
+                                Color.Transparent
+                            ),
+                            center = sunCenter,
+                            radius = h * 0.26f * pulse
                         ),
                         center = sunCenter,
-                        radius = h * 0.24f * pulse
-                    ),
-                    center = sunCenter,
-                    radius = h * 0.24f * pulse
-                )
-                drawCircle(
-                    color = Color(0xFFFFFBE6),
-                    center = sunCenter,
-                    radius = h * 0.042f
-                )
-            }
-
-            WeatherType.CLOUDY, WeatherType.RAIN, WeatherType.SNOW -> {
-                // 흘러가는 구름 레이어
-                val cloudBaseColor = when (weather) {
-                    WeatherType.RAIN -> Color(0xFF1E293B).copy(alpha = 0.85f)
-                    WeatherType.SNOW -> Color(0xFFCBD5E1).copy(alpha = 0.35f)
-                    else -> Color(0xFFE2E8F0).copy(alpha = 0.38f)
+                        radius = h * 0.26f * pulse
+                    )
+                    drawCircle(
+                        color = Color(0xFFFFFDE7),
+                        center = sunCenter,
+                        radius = h * 0.044f
+                    )
                 }
-                val drift = (elapsedSec * 14f) % (w * 1.4f)
-                for (i in 0..4) {
-                    val baseX = ((i * w * 0.28f) + drift) % (w * 1.4f) - w * 0.2f
-                    val baseY = h * (0.10f + (i % 3) * 0.08f)
-                    val cw = w * (0.18f + (i % 2) * 0.07f)
-                    val ch = h * 0.09f
-                    drawOval(
-                        color = cloudBaseColor,
-                        topLeft = Offset(baseX, baseY),
-                        size = Size(cw, ch)
+
+                WeatherType.CLOUDY, WeatherType.RAIN, WeatherType.SNOW -> {
+                    val cloudColor = when (weather) {
+                        WeatherType.RAIN -> Color(0xFF263238).copy(alpha = 0.85f)
+                        WeatherType.SNOW -> Color(0xFFE2E8F0).copy(alpha = 0.50f)
+                        else -> Color(0xFFECEFF1).copy(alpha = 0.45f)
+                    }
+                    val drift = (elapsedSec * 16f) % (w * 1.4f)
+                    for (i in 0..4) {
+                        val baseX = ((i * w * 0.28f) + drift) % (w * 1.4f) - w * 0.2f
+                        val baseY = h * (0.09f + (i % 3) * 0.08f)
+                        val cw = w * (0.20f + (i % 2) * 0.07f)
+                        val ch = h * 0.095f
+                        drawOval(color = cloudColor, topLeft = Offset(baseX, baseY), size = Size(cw, ch))
+                        drawOval(
+                            color = cloudColor,
+                            topLeft = Offset(baseX + cw * 0.25f, baseY - ch * 0.35f),
+                            size = Size(cw * 0.65f, ch * 0.9f)
+                        )
+                    }
+                }
+            }
+        } else {
+            // [밤] 맑음 -> 보름달 + 반짝이는 별 / 흐림·비·눈 -> 어두운 밤 먹구름
+            when (weather) {
+                WeatherType.CLEAR -> {
+                    // 반짝이는 별
+                    val starCount = 34
+                    for (i in 0 until starCount) {
+                        val sx = ((i * 173.3f) % 0.94f + 0.03f) * w
+                        val sy = ((i * 89.7f) % 0.38f + 0.03f) * h
+                        val twinkle = (0.35f + 0.65f * ((sin(elapsedSec * (1.5f + (i % 4) * 0.7f) + i) + 1f) * 0.5f))
+                        val radius = (0.9f + (i % 3) * 0.6f).dp.toPx()
+                        drawCircle(
+                            color = Color(0xFFE2F1FF).copy(alpha = twinkle),
+                            center = Offset(sx, sy),
+                            radius = radius
+                        )
+                    }
+
+                    // 보름달 + 달빛 후광
+                    val moonCenter = Offset(w * 0.63f, h * 0.17f)
+                    val moonR = h * 0.048f
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color(0xFFFFF8DC).copy(alpha = 0.55f),
+                                Color(0xFF93C5FD).copy(alpha = 0.22f),
+                                Color.Transparent
+                            ),
+                            center = moonCenter,
+                            radius = moonR * 4.2f
+                        ),
+                        center = moonCenter,
+                        radius = moonR * 4.2f
                     )
-                    drawOval(
-                        color = cloudBaseColor,
-                        topLeft = Offset(baseX + cw * 0.25f, baseY - ch * 0.35f),
-                        size = Size(cw * 0.65f, ch * 0.9f)
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(Color(0xFFFFFBEB), Color(0xFFFEF08A), Color(0xFFE2E8F0)),
+                            center = Offset(moonCenter.x - moonR * 0.2f, moonCenter.y - moonR * 0.2f),
+                            radius = moonR * 1.15f
+                        ),
+                        center = moonCenter,
+                        radius = moonR
                     )
+                    // 은은한 달 표면 음영
+                    drawCircle(
+                        color = Color(0xFFD6D3C4).copy(alpha = 0.35f),
+                        center = Offset(moonCenter.x + moonR * 0.28f, moonCenter.y - moonR * 0.12f),
+                        radius = moonR * 0.22f
+                    )
+                    drawCircle(
+                        color = Color(0xFFD6D3C4).copy(alpha = 0.28f),
+                        center = Offset(moonCenter.x - moonR * 0.22f, moonCenter.y + moonR * 0.25f),
+                        radius = moonR * 0.16f
+                    )
+                }
+
+                WeatherType.CLOUDY, WeatherType.RAIN, WeatherType.SNOW -> {
+                    val cloudColor = when (weather) {
+                        WeatherType.RAIN -> Color(0xFF0F172A).copy(alpha = 0.90f)
+                        WeatherType.SNOW -> Color(0xFF475569).copy(alpha = 0.45f)
+                        else -> Color(0xFF334155).copy(alpha = 0.55f)
+                    }
+                    val drift = (elapsedSec * 12f) % (w * 1.4f)
+                    for (i in 0..4) {
+                        val baseX = ((i * w * 0.28f) + drift) % (w * 1.4f) - w * 0.2f
+                        val baseY = h * (0.09f + (i % 3) * 0.08f)
+                        val cw = w * (0.20f + (i % 2) * 0.07f)
+                        val ch = h * 0.095f
+                        drawOval(color = cloudColor, topLeft = Offset(baseX, baseY), size = Size(cw, ch))
+                        drawOval(
+                            color = cloudColor,
+                            topLeft = Offset(baseX + cw * 0.25f, baseY - ch * 0.35f),
+                            size = Size(cw * 0.65f, ch * 0.9f)
+                        )
+                    }
                 }
             }
         }
@@ -801,7 +945,7 @@ fun WeatherSkyBackground(
         // 지평선 아래는 어둡게 정리해서 도로 네온 대비 유지
         drawRect(
             brush = Brush.verticalGradient(
-                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f)),
+                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.88f)),
                 startY = horizonY * 0.7f,
                 endY = horizonY * 1.25f
             ),
@@ -814,6 +958,7 @@ fun WeatherSkyBackground(
 @Composable
 fun WeatherPrecipitationOverlay(
     weather: WeatherType,
+    isDay: Boolean,
     speed: Float,
     elapsedSec: Float,
     modifier: Modifier = Modifier
@@ -824,7 +969,8 @@ fun WeatherPrecipitationOverlay(
         val speedFactor = (speed / 120f).coerceIn(0f, 1.5f)
 
         if (weather == WeatherType.RAIN) {
-            val dropCount = 55
+            val dropCount = 58
+            val rainColor = if (isDay) Color(0xFFE0F2FE) else Color(0xFF93C5FD)
             for (i in 0 until dropCount) {
                 val seed = i * 97.31f
                 val fallSpeed = 0.75f + (i % 5) * 0.14f + speedFactor * 0.35f
@@ -835,7 +981,7 @@ fun WeatherPrecipitationOverlay(
                 val slant = 4f + speedFactor * 10f
 
                 drawLine(
-                    color = Color(0xFFBAE6FD).copy(alpha = 0.35f + (i % 3) * 0.12f),
+                    color = rainColor.copy(alpha = 0.32f + (i % 3) * 0.12f),
                     start = Offset(x, y),
                     end = Offset(x - slant, y + len),
                     strokeWidth = 1.4.dp.toPx(),
@@ -854,7 +1000,7 @@ fun WeatherPrecipitationOverlay(
                 val r = (1.8f + (i % 3) * 1.1f).dp.toPx()
 
                 drawCircle(
-                    color = Color.White.copy(alpha = 0.45f + (i % 3) * 0.15f),
+                    color = Color.White.copy(alpha = 0.48f + (i % 3) * 0.15f),
                     center = Offset(x, y),
                     radius = r
                 )
@@ -933,14 +1079,12 @@ fun AlignedForwardRoadOverlay(
         val h = size.height
         val intensity = (speed / 120f).coerceIn(0.12f, 1.35f)
 
-        // bg_hud_road.png 실제 도로 상단(소실선) 및 하단 폭에 맞춘 원근 직선
         val centerX = w * roadCenterInBg
         val topY = h * 0.335f
         val botY = h * 0.77f
         val topHalfW = w * 0.032f
         val botHalfW = w * 0.34f
 
-        // 차량 양옆을 감싸는 주행 차선 점선(±0.46) + 도로 외곽 레일 빛줄기(±0.96)
         val innerLaneRatios = listOf(-0.46f, 0.46f)
         val outerRailRatios = listOf(-0.96f, 0.96f)
         val dashCount = 7
@@ -958,7 +1102,6 @@ fun AlignedForwardRoadOverlay(
             val halfW1 = topHalfW + (botHalfW - topHalfW) * p1
             val halfW2 = topHalfW + (botHalfW - topHalfW) * p2
 
-            // 1) 차량 양옆 차선 점선
             val innerAlpha = ((0.22f + 0.55f * p1) * intensity).coerceIn(0f, 0.85f)
             val innerStroke = ((1.2f + 2.4f * p1) * (0.8f + 0.3f * intensity)).dp.toPx()
             for (ratio in innerLaneRatios) {
@@ -971,7 +1114,6 @@ fun AlignedForwardRoadOverlay(
                 )
             }
 
-            // 2) 배경 도로 외곽 라인을 따라 흐르는 은은한 글로우 점선
             val outerAlpha = ((0.14f + 0.36f * p1) * intensity).coerceIn(0f, 0.6f)
             val outerStroke = ((1.0f + 1.8f * p1) * (0.75f + 0.25f * intensity)).dp.toPx()
             for (ratio in outerRailRatios) {

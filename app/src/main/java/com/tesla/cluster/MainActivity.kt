@@ -39,7 +39,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -56,7 +55,6 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.abs
 import kotlin.math.exp
-import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -111,7 +109,6 @@ fun TeslaClusterScreen() {
     var smoothSpeedKmh by remember { mutableFloatStateOf(0f) }
     var displayedSpeedInt by remember { mutableIntStateOf(0) }
     var roadScrollPhase by remember { mutableFloatStateOf(0f) }
-    var elapsedSec by remember { mutableFloatStateOf(0f) }
 
     var totalDistanceMeters by remember { mutableFloatStateOf(0f) }
     var lastLocation by remember { mutableStateOf<Location?>(null) }
@@ -168,9 +165,7 @@ fun TeslaClusterScreen() {
             val nowNs = System.nanoTime()
             val dtSec = ((nowNs - lastFrameNs) / 1_000_000_000.0).toFloat().coerceIn(0.001f, 0.05f)
             lastFrameNs = nowNs
-            elapsedSec += dtSec
 
-            // 속도계 터치 시 테스트 속도 0 -> 130 -> 0 왕복 시뮬레이션
             if (isTestDriving) {
                 val rate = if (testAccelerating) 24f else 28f
                 if (testAccelerating) {
@@ -187,7 +182,6 @@ fun TeslaClusterScreen() {
             val rawTarget = if (isTestDriving) testSpeedKmh else gpsSpeedKmh
             val clampedTarget = rawTarget.coerceIn(0f, 200f)
 
-            // 게이지/모션용 연속 보간 속도
             val diff = clampedTarget - smoothSpeedKmh
             if (abs(diff) < 0.01f) {
                 smoothSpeedKmh = clampedTarget
@@ -196,10 +190,8 @@ fun TeslaClusterScreen() {
                 smoothSpeedKmh += diff * alpha
             }
 
-            // 숫자가 멈칫하지 않고 1씩 일정 간격으로 착착 올라가거나 내려가도록 처리
             val desiredInt = clampedTarget.toInt()
             if (displayedSpeedInt != desiredInt) {
-                // 속도가 빠르거나 차이가 클수록 1씩 넘어가는 간격을 살짝 단축 (최소 ~22ms, 기본 ~55ms)
                 val stepInterval = (0.060f - (abs(desiredInt - displayedSpeedInt).coerceAtMost(40) * 0.0009f))
                     .coerceIn(0.022f, 0.060f)
                 digitStepAccumSec += dtSec
@@ -215,9 +207,8 @@ fun TeslaClusterScreen() {
                 digitStepAccumSec = 0f
             }
 
-            // 속도에 비례해 전진하는 도로 라인 흐름
             if (smoothSpeedKmh > 0.5f) {
-                val flowRate = (smoothSpeedKmh / 42f) * dtSec
+                val flowRate = (smoothSpeedKmh / 36f) * dtSec
                 roadScrollPhase = (roadScrollPhase + flowRate) % 1f
             }
 
@@ -341,11 +332,6 @@ fun TeslaClusterScreen() {
     val carCenterXRatio = 0.555f
     val carCenterYRatio = 0.67f
 
-    val speedFactor = (smoothSpeedKmh / 120f).coerceIn(0f, 1.4f)
-    // 속도에 따른 미세 주행 진동 및 앞으로 치고 나가는 느낌의 스케일 변화
-    val carBobY = if (smoothSpeedKmh > 1f) sin(elapsedSec * (14f + speedFactor * 18f)) * (1.2f * speedFactor) else 0f
-    val carSurgeScale = 1f + (speedFactor * 0.025f) + if (smoothSpeedKmh > 1f) sin(elapsedSec * 6f) * (0.004f * speedFactor) else 0f
-
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
@@ -354,7 +340,7 @@ fun TeslaClusterScreen() {
         val screenW = maxWidth
         val screenH = maxHeight
 
-        // 1) 네온 속도계 + 도로 배경 이미지
+        // 1) 네온 속도계 + 도로 배경 이미지 (진동 없이 깔끔하게 고정)
         Image(
             painter = painterResource(id = R.drawable.bg_hud_road),
             contentDescription = "HUD Road Background",
@@ -365,31 +351,26 @@ fun TeslaClusterScreen() {
                 .fillMaxWidth(bgWidthRatio)
         )
 
-        // 2) 속도에 비례해 앞으로 달리는 느낌을 주는 도로 모션 스트릭 오버레이
-        ForwardMotionRoadOverlay(
+        // 2) 배경 도로 기울기/소실점에 맞춘 전진 차선·노면 스트릭
+        AlignedForwardRoadOverlay(
             speed = smoothSpeedKmh,
             scrollPhase = roadScrollPhase,
-            carCenterXRatio = carCenterXRatio,
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .fillMaxHeight()
                 .fillMaxWidth(bgWidthRatio)
         )
 
-        // 3) 차량 바닥 그림자 + 테슬라 모델 3 하이랜드 리어뷰 (전진 모션 적용)
+        // 3) 차량 바닥 그림자 + 테슬라 모델 3 하이랜드 리어뷰 (진동 없이 안정적으로 고정)
         val carWidth = screenW * 0.175f
         val carHeight = carWidth * 0.68f
         Box(
             modifier = Modifier
                 .offset(
                     x = screenW * carCenterXRatio - carWidth / 2,
-                    y = screenH * carCenterYRatio - carHeight / 2 + carBobY.dp
+                    y = screenH * carCenterYRatio - carHeight / 2
                 )
-                .size(width = carWidth, height = carHeight)
-                .graphicsLayer {
-                    scaleX = carSurgeScale
-                    scaleY = carSurgeScale
-                },
+                .size(width = carWidth, height = carHeight),
             contentAlignment = Alignment.Center
         ) {
             Canvas(modifier = Modifier.fillMaxSize()) {
@@ -580,10 +561,9 @@ fun TeslaClusterScreen() {
 }
 
 @Composable
-fun ForwardMotionRoadOverlay(
+fun AlignedForwardRoadOverlay(
     speed: Float,
     scrollPhase: Float,
-    carCenterXRatio: Float,
     modifier: Modifier = Modifier
 ) {
     if (speed <= 0.5f) return
@@ -591,34 +571,33 @@ fun ForwardMotionRoadOverlay(
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
-        val intensity = (speed / 120f).coerceIn(0.08f, 1.35f)
+        val intensity = (speed / 120f).coerceIn(0.1f, 1.35f)
 
-        // 도로 원근 구간의 대략적인 X 중심 정렬 (전체 화면 기준 carCenterXRatio 보정)
-        val roadCenterX = w * (carCenterXRatio / 0.86f).coerceIn(0.45f, 0.72f)
-        val topY = h * 0.24f
-        val botY = h * 0.95f
+        // bg_hud_road.png 기준 도로 소실점과 하단 차선 퍼짐 비율 정렬
+        val vanishX = w * 0.615f
+        val vanishY = h * 0.275f
+        val bottomY = h * 0.88f
 
-        val streakCount = 8
-        val laneOffsets = listOf(-0.22f, -0.07f, 0.07f, 0.22f)
+        val bottomLaneOffsets = listOf(-0.235f, -0.082f, 0.082f, 0.235f)
+        val streakCount = 7
 
         for (i in 0 until streakCount) {
             val rawT = ((i.toFloat() / streakCount) + scrollPhase) % 1f
-            // 원근감: 아래쪽(가까운 쪽)으로 갈수록 빠르게 넓어지며 지나감
-            val pStart = rawT * rawT
-            val streakLen = (0.035f + 0.045f * intensity) * (0.4f + rawT)
-            val pEnd = (rawT + streakLen).coerceAtMost(1f).let { it * it }
+            val p1 = rawT * rawT
+            val len = (0.04f + 0.05f * intensity) * (0.35f + rawT)
+            val p2 = (rawT + len).coerceAtMost(1f).let { it * it }
 
-            val y1 = topY + (botY - topY) * pStart
-            val y2 = topY + (botY - topY) * pEnd
+            val y1 = vanishY + (bottomY - vanishY) * p1
+            val y2 = vanishY + (bottomY - vanishY) * p2
             if (y2 <= y1) continue
 
-            val spreadScale = 0.25f + 1.35f * pStart
-            val alpha = ((0.18f + 0.42f * pStart) * intensity).coerceIn(0f, 0.75f)
-            val strokeW = ((1.2f + 2.4f * pStart) * (0.7f + 0.4f * intensity)).dp.toPx()
+            val alpha = ((0.16f + 0.44f * p1) * intensity).coerceIn(0f, 0.72f)
+            val strokeW = ((1.0f + 2.2f * p1) * (0.75f + 0.35f * intensity)).dp.toPx()
 
-            for (lane in laneOffsets) {
-                val x1 = roadCenterX + w * lane * spreadScale
-                val x2 = roadCenterX + w * lane * (0.25f + 1.35f * pEnd)
+            for (offsetRatio in bottomLaneOffsets) {
+                val dx = w * offsetRatio
+                val x1 = vanishX + dx * p1
+                val x2 = vanishX + dx * p2
                 drawLine(
                     color = Color(0xFF67E8F9).copy(alpha = alpha),
                     start = Offset(x1, y1),

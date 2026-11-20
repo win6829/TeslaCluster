@@ -56,9 +56,7 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.exp
-import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -160,7 +158,7 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 2. 60fps 루프: 테스트 주행 + 부드러운 속도 보간 + 1씩 순차 숫자 변경 + 전진 도로 흐름
+    // 2. 60fps 루프: 테스트 주행(0~200) + 부드러운 속도 보간 + 1씩 순차 숫자 변경 + 전진 도로 흐름
     LaunchedEffect(Unit) {
         var lastFrameNs = System.nanoTime()
         var digitStepAccumSec = 0f
@@ -171,10 +169,10 @@ fun TeslaClusterScreen() {
             lastFrameNs = nowNs
 
             if (isTestDriving) {
-                val rate = if (testAccelerating) 24f else 28f
+                val rate = if (testAccelerating) 32f else 38f
                 if (testAccelerating) {
-                    testSpeedKmh = (testSpeedKmh + rate * dtSec).coerceAtMost(130f)
-                    if (testSpeedKmh >= 130f) testAccelerating = false
+                    testSpeedKmh = (testSpeedKmh + rate * dtSec).coerceAtMost(200f)
+                    if (testSpeedKmh >= 200f) testAccelerating = false
                 } else {
                     testSpeedKmh = (testSpeedKmh - rate * dtSec).coerceAtLeast(0f)
                     if (testSpeedKmh <= 0f) testAccelerating = true
@@ -356,10 +354,10 @@ fun TeslaClusterScreen() {
                 .fillMaxWidth(bgWidthRatio)
         )
 
-        // 2) 속도에 맞춰 회전하는 속도계 바늘 오버레이
+        // 2) 속도에 맞춰 회전하는 속도계 바늘 오버레이 (최고 속도 200 km/h)
         SpeedGaugeNeedleOverlay(
             speed = smoothSpeedKmh,
-            maxSpeed = 160f,
+            maxSpeed = 200f,
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .fillMaxHeight()
@@ -627,19 +625,6 @@ fun SpeedGaugeNeedleOverlay(
                     startY = glowStartY,
                     endY = tipY
                 )
-            )
-
-            val rad = (angleDeg - 90f) * Math.PI / 180.0
-            val tipX = cx + (cos(rad) * (radius * 0.96f)).toFloat()
-            val tipYWorld = cy + (sin(rad) * (radius * 0.96f)).toFloat()
-            drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(Color.White, Color(0xFF67E8F9).copy(alpha = 0.6f), Color.Transparent),
-                    center = Offset(tipX, tipYWorld),
-                    radius = 12.dp.toPx()
-                ),
-                center = Offset(tipX, tipYWorld),
-                radius = 12.dp.toPx()
             )
         }
     }

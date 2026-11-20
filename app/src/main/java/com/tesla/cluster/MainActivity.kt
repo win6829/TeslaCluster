@@ -38,7 +38,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -54,7 +56,9 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -156,7 +160,7 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 2. 60fps 루프: 테스트 주행 속도 생성 + 부드러운 속도 보간 + 1씩 순차 숫자 변경 + 전진 도로 흐름
+    // 2. 60fps 루프: 테스트 주행 + 부드러운 속도 보간 + 1씩 순차 숫자 변경 + 전진 도로 흐름
     LaunchedEffect(Unit) {
         var lastFrameNs = System.nanoTime()
         var digitStepAccumSec = 0f
@@ -325,12 +329,13 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 위치 미세 조정용 비율
-    val bgWidthRatio = 0.86f
-    val speedCenterXRatio = 0.168f
-    val speedCenterYRatio = 0.56f
-    val carCenterXRatio = 0.555f
-    val carCenterYRatio = 0.67f
+    // 배경 도로 중심축과 차량 위치를 하나의 기준으로 동기화
+    val bgWidthRatio = 0.88f
+    val roadCenterInBg = 0.66f
+    val carCenterXRatio = bgWidthRatio * roadCenterInBg
+    val carCenterYRatio = 0.66f
+    val speedCenterXRatio = 0.175f
+    val speedCenterYRatio = 0.54f
 
     BoxWithConstraints(
         modifier = Modifier
@@ -340,7 +345,7 @@ fun TeslaClusterScreen() {
         val screenW = maxWidth
         val screenH = maxHeight
 
-        // 1) 네온 속도계 + 도로 배경 이미지 (진동 없이 깔끔하게 고정)
+        // 1) 네온 시안 속도계 + 도로 오버레이 이미지 (고정)
         Image(
             painter = painterResource(id = R.drawable.bg_hud_road),
             contentDescription = "HUD Road Background",
@@ -351,17 +356,28 @@ fun TeslaClusterScreen() {
                 .fillMaxWidth(bgWidthRatio)
         )
 
-        // 2) 배경 도로 기울기/소실점에 맞춘 전진 차선·노면 스트릭
-        AlignedForwardRoadOverlay(
+        // 2) 속도에 맞춰 회전하는 속도계 바늘 오버레이
+        SpeedGaugeNeedleOverlay(
             speed = smoothSpeedKmh,
-            scrollPhase = roadScrollPhase,
+            maxSpeed = 160f,
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .fillMaxHeight()
                 .fillMaxWidth(bgWidthRatio)
         )
 
-        // 3) 차량 바닥 그림자 + 테슬라 모델 3 하이랜드 리어뷰 (진동 없이 안정적으로 고정)
+        // 3) 배경 도로 소실점·기울기 및 차량 중심에 정확히 정렬된 전진 점선
+        AlignedForwardRoadOverlay(
+            speed = smoothSpeedKmh,
+            scrollPhase = roadScrollPhase,
+            roadCenterInBg = roadCenterInBg,
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .fillMaxHeight()
+                .fillMaxWidth(bgWidthRatio)
+        )
+
+        // 4) 차량 바닥 그림자 + 테슬라 모델 3 하이랜드 리어뷰 (도로 중심축에 고정)
         val carWidth = screenW * 0.175f
         val carHeight = carWidth * 0.68f
         Box(
@@ -392,8 +408,8 @@ fun TeslaClusterScreen() {
             )
         }
 
-        // 4) 좌측 속도계 링 중앙 실시간 숫자 (터치 시 테스트 주행 토글)
-        val speedBoxSize = 154.dp
+        // 5) 좌측 속도계 링 중앙 실시간 숫자 (터치 시 테스트 주행 토글)
+        val speedBoxSize = 140.dp
         Box(
             modifier = Modifier
                 .offset(
@@ -419,20 +435,20 @@ fun TeslaClusterScreen() {
                 Text(
                     text = "$displayedSpeedInt",
                     color = Color.White,
-                    fontSize = 64.sp,
+                    fontSize = 60.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = (-2).sp
                 )
                 Text(
                     text = if (isTestDriving) "TEST" else "km/h",
                     color = if (isTestDriving) Color(0xFF00E676) else Color(0xFF94E2F5),
-                    fontSize = 15.sp,
+                    fontSize = 14.sp,
                     fontWeight = if (isTestDriving) FontWeight.Bold else FontWeight.Medium
                 )
             }
         }
 
-        // 5) 상단 바 / 우측 Trip A / 하단 주소 UI 오버레이
+        // 6) 상단 바 / 우측 Trip A / 하단 주소 UI 오버레이
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -561,9 +577,79 @@ fun TeslaClusterScreen() {
 }
 
 @Composable
+fun SpeedGaugeNeedleOverlay(
+    speed: Float,
+    maxSpeed: Float,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+
+        val cx = w * 0.198f
+        val cy = h * 0.54f
+        val radius = minOf(w * 0.175f, h * 0.34f)
+
+        val progress = (speed / maxSpeed).coerceIn(0f, 1f)
+        val angleDeg = -135f + (270f * progress)
+
+        rotate(degrees = angleDeg, pivot = Offset(cx, cy)) {
+            val glowStartY = cy - radius * 0.72f
+            val tipY = cy - radius * 1.02f
+
+            drawLine(
+                brush = Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF22D3EE).copy(alpha = 0.0f),
+                        Color(0xFF22D3EE).copy(alpha = 0.55f),
+                        Color(0xFFE0F2FE).copy(alpha = 0.9f)
+                    ),
+                    startY = glowStartY,
+                    endY = tipY
+                ),
+                start = Offset(cx, glowStartY),
+                end = Offset(cx, tipY),
+                strokeWidth = 9.dp.toPx(),
+                cap = StrokeCap.Round
+            )
+
+            val needlePath = Path().apply {
+                moveTo(cx - 3.2.dp.toPx(), cy - radius * 0.74f)
+                lineTo(cx + 3.2.dp.toPx(), cy - radius * 0.74f)
+                lineTo(cx + 1.1.dp.toPx(), tipY)
+                lineTo(cx - 1.1.dp.toPx(), tipY)
+                close()
+            }
+            drawPath(
+                path = needlePath,
+                brush = Brush.verticalGradient(
+                    colors = listOf(Color(0xFF38BDF8), Color.White),
+                    startY = glowStartY,
+                    endY = tipY
+                )
+            )
+
+            val rad = (angleDeg - 90f) * Math.PI / 180.0
+            val tipX = cx + (cos(rad) * (radius * 0.96f)).toFloat()
+            val tipYWorld = cy + (sin(rad) * (radius * 0.96f)).toFloat()
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color.White, Color(0xFF67E8F9).copy(alpha = 0.6f), Color.Transparent),
+                    center = Offset(tipX, tipYWorld),
+                    radius = 12.dp.toPx()
+                ),
+                center = Offset(tipX, tipYWorld),
+                radius = 12.dp.toPx()
+            )
+        }
+    }
+}
+
+@Composable
 fun AlignedForwardRoadOverlay(
     speed: Float,
     scrollPhase: Float,
+    roadCenterInBg: Float,
     modifier: Modifier = Modifier
 ) {
     if (speed <= 0.5f) return
@@ -571,38 +657,56 @@ fun AlignedForwardRoadOverlay(
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
-        val intensity = (speed / 120f).coerceIn(0.1f, 1.35f)
+        val intensity = (speed / 120f).coerceIn(0.12f, 1.35f)
 
-        // bg_hud_road.png 기준 도로 소실점과 하단 차선 퍼짐 비율 정렬
-        val vanishX = w * 0.615f
-        val vanishY = h * 0.275f
-        val bottomY = h * 0.88f
+        // bg_hud_road.png 실제 도로 상단(소실선) 및 하단 폭에 맞춘 원근 직선
+        val centerX = w * roadCenterInBg
+        val topY = h * 0.335f
+        val botY = h * 0.77f
+        val topHalfW = w * 0.032f
+        val botHalfW = w * 0.34f
 
-        val bottomLaneOffsets = listOf(-0.235f, -0.082f, 0.082f, 0.235f)
-        val streakCount = 7
+        // 차량 양옆을 감싸는 주행 차선 점선(±0.46) + 도로 외곽 레일 빛줄기(±0.96)
+        val innerLaneRatios = listOf(-0.46f, 0.46f)
+        val outerRailRatios = listOf(-0.96f, 0.96f)
+        val dashCount = 7
 
-        for (i in 0 until streakCount) {
-            val rawT = ((i.toFloat() / streakCount) + scrollPhase) % 1f
+        for (i in 0 until dashCount) {
+            val rawT = ((i.toFloat() / dashCount) + scrollPhase) % 1f
+            // 원근 가속: 멀리서 촘촘하게 출발해 차 가까이 올수록 길고 빠르게 통과
             val p1 = rawT * rawT
-            val len = (0.04f + 0.05f * intensity) * (0.35f + rawT)
-            val p2 = (rawT + len).coerceAtMost(1f).let { it * it }
+            val dashLen = (0.045f + 0.045f * intensity) * (0.35f + rawT)
+            val p2 = (rawT + dashLen).coerceAtMost(1f).let { it * it }
 
-            val y1 = vanishY + (bottomY - vanishY) * p1
-            val y2 = vanishY + (bottomY - vanishY) * p2
+            val y1 = topY + (botY - topY) * p1
+            val y2 = topY + (botY - topY) * p2
             if (y2 <= y1) continue
 
-            val alpha = ((0.16f + 0.44f * p1) * intensity).coerceIn(0f, 0.72f)
-            val strokeW = ((1.0f + 2.2f * p1) * (0.75f + 0.35f * intensity)).dp.toPx()
+            val halfW1 = topHalfW + (botHalfW - topHalfW) * p1
+            val halfW2 = topHalfW + (botHalfW - topHalfW) * p2
 
-            for (offsetRatio in bottomLaneOffsets) {
-                val dx = w * offsetRatio
-                val x1 = vanishX + dx * p1
-                val x2 = vanishX + dx * p2
+            // 1) 차량 양옆 차선 점선
+            val innerAlpha = ((0.22f + 0.55f * p1) * intensity).coerceIn(0f, 0.85f)
+            val innerStroke = ((1.2f + 2.4f * p1) * (0.8f + 0.3f * intensity)).dp.toPx()
+            for (ratio in innerLaneRatios) {
                 drawLine(
-                    color = Color(0xFF67E8F9).copy(alpha = alpha),
-                    start = Offset(x1, y1),
-                    end = Offset(x2, y2),
-                    strokeWidth = strokeW,
+                    color = Color(0xFF67E8F9).copy(alpha = innerAlpha),
+                    start = Offset(centerX + halfW1 * ratio, y1),
+                    end = Offset(centerX + halfW2 * ratio, y2),
+                    strokeWidth = innerStroke,
+                    cap = StrokeCap.Round
+                )
+            }
+
+            // 2) 배경 도로 외곽 라인을 따라 흐르는 은은한 글로우 점선
+            val outerAlpha = ((0.14f + 0.36f * p1) * intensity).coerceIn(0f, 0.6f)
+            val outerStroke = ((1.0f + 1.8f * p1) * (0.75f + 0.25f * intensity)).dp.toPx()
+            for (ratio in outerRailRatios) {
+                drawLine(
+                    color = Color(0xFFBAE6FD).copy(alpha = outerAlpha),
+                    start = Offset(centerX + halfW1 * ratio, y1),
+                    end = Offset(centerX + halfW2 * ratio, y2),
+                    strokeWidth = outerStroke,
                     cap = StrokeCap.Round
                 )
             }

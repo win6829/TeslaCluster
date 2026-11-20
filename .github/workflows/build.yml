@@ -24,12 +24,13 @@ jobs:
         run: |
           set -e
           echo "sdk.dir=/usr/local/lib/android/sdk" > local.properties
+          echo "android.useAndroidX=true" > gradle.properties
           echo "org.gradle.caching=false" >> gradle.properties
           echo "org.gradle.configuration-cache=false" >> gradle.properties
           yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
           curl -sSL https://services.gradle.org/distributions/gradle-8.5-bin.zip -o gradle.zip
-          unzip -q gradle.zip -d /opt/gradle
-          /opt/gradle/gradle-8.5/bin/gradle assembleDebug --no-daemon --no-build-cache
+          unzip -q gradle.zip -d "$HOME/gradle"
+          "$HOME/gradle/gradle-8.5/bin/gradle" assembleDebug --no-daemon --no-build-cache
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

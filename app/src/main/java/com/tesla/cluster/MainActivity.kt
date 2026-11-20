@@ -13,6 +13,7 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Looper
+import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import androidx.activity.ComponentActivity
@@ -54,18 +55,37 @@ import java.util.*
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        hideSystemUI()
         setContent {
             TeslaClusterScreen()
         }
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            hideSystemUI()
+        }
+    }
+
+    @Suppress("DEPRECATION")
     private fun hideSystemUI() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.insetsController?.let {
-                it.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-                it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                window.insetsController?.let {
+                    it.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                    it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            } else {
+                window.decorView.systemUiVisibility = (
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        or View.SYSTEM_UI_FLAG_FULLSCREEN
+                    )
             }
+        } catch (_: Exception) {
         }
     }
 }
@@ -84,8 +104,6 @@ fun TeslaClusterScreen() {
     var currentDateText by remember { mutableStateOf("") }
     var batteryPct by remember { mutableIntStateOf(100) }
     var isCharging by remember { mutableStateOf(false) }
-
-    // 도로 점선 애니메이션 진행도 (0f ~ 1f 반복)
     var roadPhase by remember { mutableFloatStateOf(0f) }
 
     var hasLocationPermission by remember {
@@ -97,14 +115,19 @@ fun TeslaClusterScreen() {
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
-        hasLocationPermission = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        hasLocationPermission = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+            perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
     }
 
     LaunchedEffect(Unit) {
+        delay(300L)
         if (!hasLocationPermission) {
-            permissionLauncher.launch(
-                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-            )
+            try {
+                permissionLauncher.launch(
+                    arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+                )
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -120,7 +143,7 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 2. 속도에 연동된 3D 도로 차선 흐르는 애니메이션 (60fps)
+    // 2. 속도에 연동된 3D 도로 차선 흐르는 애니메이션
     LaunchedEffect(currentSpeedKmh) {
         while (true) {
             if (currentSpeedKmh > 1.5f) {
@@ -143,43 +166,66 @@ fun TeslaClusterScreen() {
                     }
                     val status = it.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
                     isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
-                            status == BatteryManager.BATTERY_STATUS_FULL
+                        status == BatteryManager.BATTERY_STATUS_FULL
                 }
             }
         }
-        context.registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        onDispose { context.unregisterReceiver(receiver) }
+        try {
+            context.registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        } catch (_: Exception) {
+        }
+        onDispose {
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (_: Exception) {
+            }
+        }
     }
 
     // 4. GPS 속도 및 주행거리 계산
     DisposableEffect(hasLocationPermission) {
         if (!hasLocationPermission) return@DisposableEffect onDispose {}
 
-        val fusedClient = LocationServices.getFusedLocationProviderClient(context)
-        val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 500L)
-            .setMinUpdateIntervalMillis(300L)
-            .build()
+        var fusedClient: FusedLocationProviderClient? = null
+        var callback: LocationCallback? = null
 
-        val callback = object : LocationCallback() {
-            override fun onLocationResult(result: LocationResult) {
-                val loc = result.lastLocation ?: return
-                val speed = if (loc.hasSpeed()) loc.speed * 3.6f else 0f
-                currentSpeedKmh = if (speed < 1.5f) 0f else speed
+        try {
+            fusedClient = LocationServices.getFusedLocationProviderClient(context)
+            val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 500L)
+                .setMinUpdateIntervalMillis(300L)
+                .build()
 
-                lastLocation?.let { prev ->
-                    if (loc.accuracy < 25f) {
-                        val dist = prev.distanceTo(loc)
-                        if (dist in 1.0f..150.0f) {
-                            totalDistanceMeters += dist
+            callback = object : LocationCallback() {
+                override fun onLocationResult(result: LocationResult) {
+                    val loc = result.lastLocation ?: return
+                    val speed = if (loc.hasSpeed()) loc.speed * 3.6f else 0f
+                    currentSpeedKmh = if (speed < 1.5f) 0f else speed
+
+                    lastLocation?.let { prev ->
+                        if (loc.accuracy < 25f) {
+                            val dist = prev.distanceTo(loc)
+                            if (dist in 1.0f..150.0f) {
+                                totalDistanceMeters += dist
+                            }
                         }
                     }
+                    lastLocation = loc
                 }
-                lastLocation = loc
             }
+
+            fusedClient.requestLocationUpdates(locationRequest, callback, Looper.getMainLooper())
+        } catch (_: Exception) {
+            currentAddress = "GPS 서비스 초기화 대기"
         }
 
-        fusedClient.requestLocationUpdates(locationRequest, callback, Looper.getMainLooper())
-        onDispose { fusedClient.removeLocationUpdates(callback) }
+        onDispose {
+            try {
+                if (fusedClient != null && callback != null) {
+                    fusedClient.removeLocationUpdates(callback)
+                }
+            } catch (_: Exception) {
+            }
+        }
     }
 
     // 5. 위치 주소 변환 (200m 이동 시 갱신)
@@ -216,33 +262,28 @@ fun TeslaClusterScreen() {
         label = "speedAnim"
     )
 
-    // 전체 컨테이너 (올블랙 OLED)
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF000000))
     ) {
-        // [배경 & 중앙] 입체 3D 주행 도로 + 모델 3 차량 비주얼
         Model3DrivingCanvas(
             speed = animatedSpeed,
             roadPhase = roadPhase,
             modifier = Modifier.fillMaxSize()
         )
 
-        // [전면 UI 오버레이]
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = 24.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // 1. 상단 바: 좌측(날짜/시간/배터리 컴팩트) & 우측(GPS 상태)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 컴팩트 날짜 · 시간 · 배터리
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -284,7 +325,6 @@ fun TeslaClusterScreen() {
                     )
                 }
 
-                // 우측 상단 GPS 상태 뱃지
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
@@ -309,7 +349,6 @@ fun TeslaClusterScreen() {
                 }
             }
 
-            // 2. 중단 영역: 좌측(대형 속도계 & 게이지) / 중앙(모델 3 주행뷰 공간) / 우측(Trip A)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -317,7 +356,6 @@ fun TeslaClusterScreen() {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                // 좌측: 아크 게이지 + 대형 속도 숫자
                 Box(
                     modifier = Modifier.size(210.dp),
                     contentAlignment = Alignment.Center
@@ -344,10 +382,8 @@ fun TeslaClusterScreen() {
                     }
                 }
 
-                // 중앙 여백 (배경의 3D 모델 3 차량이 선명하게 보이는 영역)
                 Spacer(modifier = Modifier.weight(1f))
 
-                // 우측: 누적 주행거리 카드 (터치 시 초기화)
                 Column(
                     horizontalAlignment = Alignment.End,
                     modifier = Modifier
@@ -388,7 +424,6 @@ fun TeslaClusterScreen() {
                 }
             }
 
-            // 3. 최하단: 작은 글씨 현재 주행 위치
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
@@ -465,7 +500,6 @@ fun Model3DrivingCanvas(
         val horizonY = h * 0.24f
         val bottomY = h * 0.94f
 
-        // 1. 지평선 은은한 사이버 블루 글로우
         drawRect(
             brush = Brush.verticalGradient(
                 colors = listOf(
@@ -480,7 +514,6 @@ fun Model3DrivingCanvas(
             size = size
         )
 
-        // 2. 3D 원근감 주행 도로 면
         val roadTopHalfW = w * 0.055f
         val roadBottomHalfW = w * 0.26f
         val roadPath = Path().apply {
@@ -499,7 +532,6 @@ fun Model3DrivingCanvas(
             )
         )
 
-        // 3. 좌·우 실선 차선 경계 (네온 시안 엣지)
         drawLine(
             brush = Brush.verticalGradient(
                 listOf(Color.Transparent, Color(0xFF38BDF8).copy(alpha = 0.75f)),
@@ -521,7 +553,6 @@ fun Model3DrivingCanvas(
             strokeWidth = 3.dp.toPx()
         )
 
-        // 4. 속도에 맞춰 뒤로 흐르는 중앙 가이드 대시(점선)
         val segmentCount = 6
         for (i in 0 until segmentCount) {
             val tStart = ((i + roadPhase) / segmentCount).coerceIn(0f, 1f)
@@ -541,7 +572,6 @@ fun Model3DrivingCanvas(
             }
         }
 
-        // 5. 입체 테슬라 모델 3 차량 렌더링 (후면 쿼터뷰 전진 모습)
         drawModel3Perspective(cx = cx, baseY = h * 0.79f, scale = (h / 420f).coerceIn(0.75f, 1.3f), speed = speed)
     }
 }
@@ -555,7 +585,6 @@ private fun DrawScope.drawModel3Perspective(
     val carW = 148f * scale
     val carH = 84f * scale
 
-    // 전방 헤드라이트 빔 투사 (전진감 강조)
     val beamPath = Path().apply {
         moveTo(cx - carW * 0.36f, baseY - carH * 0.65f)
         lineTo(cx - carW * 0.75f, baseY - carH * 2.1f)
@@ -575,14 +604,12 @@ private fun DrawScope.drawModel3Perspective(
         )
     )
 
-    // 차량 하부 접지 그림자
     drawOval(
         color = Color.Black.copy(alpha = 0.85f),
         topLeft = Offset(cx - carW * 0.56f, baseY - 10f * scale),
         size = Size(carW * 1.12f, 22f * scale)
     )
 
-    // 좌·우 리어 타이어
     val tireW = 24f * scale
     val tireH = 26f * scale
     drawRoundRect(
@@ -598,7 +625,6 @@ private fun DrawScope.drawModel3Perspective(
         cornerRadius = CornerRadius(6f * scale, 6f * scale)
     )
 
-    // 하부 리어 디퓨저 (다크 그레이)
     val diffuserPath = Path().apply {
         moveTo(cx - carW * 0.42f, baseY)
         lineTo(cx + carW * 0.42f, baseY)
@@ -608,7 +634,6 @@ private fun DrawScope.drawModel3Perspective(
     }
     drawPath(path = diffuserPath, color = Color(0xFF1E293B))
 
-    // 차체 메인 바디 (입체 화이트 펄 그라데이션)
     val bodyPath = Path().apply {
         moveTo(cx - carW * 0.48f, baseY - carH * 0.12f)
         quadraticBezierTo(cx - carW * 0.51f, baseY - carH * 0.48f, cx - carW * 0.38f, baseY - carH * 0.58f)
@@ -625,7 +650,6 @@ private fun DrawScope.drawModel3Perspective(
         )
     )
 
-    // 좌·우 사이드 미러
     drawRoundRect(
         color = Color(0xFFE2E8F0),
         topLeft = Offset(cx - carW * 0.52f, baseY - carH * 0.66f),
@@ -639,7 +663,6 @@ private fun DrawScope.drawModel3Perspective(
         cornerRadius = CornerRadius(4f * scale, 4f * scale)
     )
 
-    // 캐빈 루프 필러 (화이트 아치)
     val cabinPath = Path().apply {
         moveTo(cx - carW * 0.37f, baseY - carH * 0.56f)
         lineTo(cx - carW * 0.25f, baseY - carH * 0.96f)
@@ -656,7 +679,6 @@ private fun DrawScope.drawModel3Perspective(
         )
     )
 
-    // 파노라마 리어 글래스 (틴팅 딥 네이비/블랙)
     val rearGlassPath = Path().apply {
         moveTo(cx - carW * 0.31f, baseY - carH * 0.58f)
         lineTo(cx - carW * 0.21f, baseY - carH * 0.91f)
@@ -673,7 +695,6 @@ private fun DrawScope.drawModel3Perspective(
         )
     )
 
-    // 하이랜드 스타일 ㄷ자 LED 테일램프 (좌·우)
     val tailColor = if (speed <= 1.5f) Color(0xFFFF1744) else Color(0xFFEF4444)
     val leftTail = Path().apply {
         moveTo(cx - carW * 0.43f, baseY - carH * 0.44f)
@@ -700,7 +721,6 @@ private fun DrawScope.drawModel3Perspective(
     drawPath(path = leftTail, color = tailColor)
     drawPath(path = rightTail, color = tailColor)
 
-    // 번호판 플레이트 영역
     drawRoundRect(
         color = Color(0xFFE2E8F0),
         topLeft = Offset(cx - 18f * scale, baseY - carH * 0.34f),

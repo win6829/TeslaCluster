@@ -36,16 +36,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -53,10 +57,22 @@ import com.google.android.gms.location.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.abs
 import kotlin.math.exp
+import kotlin.math.roundToInt
+import kotlin.math.sin
+
+enum class WeatherType(val label: String, val icon: String) {
+    CLEAR("맑음", "☀️"),
+    CLOUDY("구름", "☁️"),
+    RAIN("비", "🌧️"),
+    SNOW("눈", "❄️")
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -111,6 +127,7 @@ fun TeslaClusterScreen() {
     var smoothSpeedKmh by remember { mutableFloatStateOf(0f) }
     var displayedSpeedInt by remember { mutableIntStateOf(0) }
     var roadScrollPhase by remember { mutableFloatStateOf(0f) }
+    var elapsedSec by remember { mutableFloatStateOf(0f) }
 
     var totalDistanceMeters by remember { mutableFloatStateOf(0f) }
     var lastLocation by remember { mutableStateOf<Location?>(null) }
@@ -120,6 +137,15 @@ fun TeslaClusterScreen() {
     var currentDateText by remember { mutableStateOf("") }
     var batteryPct by remember { mutableIntStateOf(88) }
     var isCharging by remember { mutableStateOf(true) }
+
+    // 날씨 상태 (실시간 + 수동 테스트 오버라이드)
+    var liveWeather by remember { mutableStateOf(WeatherType.CLEAR) }
+    var manualWeather by remember { mutableStateOf<WeatherType?>(null) }
+    var temperatureC by remember { mutableStateOf<Int?>(null) }
+    var lastWeatherLocation by remember { mutableStateOf<Location?>(null) }
+    var lastWeatherFetchMs by remember { mutableLongStateOf(0L) }
+
+    val activeWeather = manualWeather ?: liveWeather
 
     var hasLocationPermission by remember {
         mutableStateOf(
@@ -158,7 +184,7 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 2. 60fps 루프: 테스트 주행(0~200) + 부드러운 속도 보간 + 1씩 순차 숫자 변경 + 전진 도로 흐름
+    // 2. 60fps 루프: 테스트 주행(0~200) + 부드러운 속도 보간 + 1씩 순차 숫자 변경 + 전진 도로/날씨 애니메이션
     LaunchedEffect(Unit) {
         var lastFrameNs = System.nanoTime()
         var digitStepAccumSec = 0f
@@ -167,6 +193,7 @@ fun TeslaClusterScreen() {
             val nowNs = System.nanoTime()
             val dtSec = ((nowNs - lastFrameNs) / 1_000_000_000.0).toFloat().coerceIn(0.001f, 0.05f)
             lastFrameNs = nowNs
+            elapsedSec += dtSec
 
             if (isTestDriving) {
                 val rate = if (testAccelerating) 32f else 38f
@@ -327,6 +354,41 @@ fun TeslaClusterScreen() {
         }
     }
 
+    // 6. 실시간 날씨 조회 (Open-Meteo 무료 API, 15분 또는 5km 이동 시 갱신)
+    LaunchedEffect(lastLocation) {
+        val loc = lastLocation ?: return@LaunchedEffect
+        val nowMs = System.currentTimeMillis()
+        val prevLoc = lastWeatherLocation
+        val shouldFetch = prevLoc == null ||
+            (nowMs - lastWeatherFetchMs > 15 * 60 * 1000L) ||
+            (prevLoc.distanceTo(loc) > 5000f)
+
+        if (shouldFetch) {
+            lastWeatherLocation = loc
+            lastWeatherFetchMs = nowMs
+            withContext(Dispatchers.IO) {
+                try {
+                    val urlStr = "https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current_weather=true"
+                    val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 5000
+                        readTimeout = 5000
+                        requestMethod = "GET"
+                    }
+                    if (conn.responseCode == 200) {
+                        val body = conn.inputStream.bufferedReader().use { it.readText() }
+                        val current = JSONObject(body).getJSONObject("current_weather")
+                        val temp = current.getDouble("temperature").roundToInt()
+                        val code = current.getInt("weathercode")
+                        temperatureC = temp
+                        liveWeather = mapWeatherCode(code)
+                    }
+                    conn.disconnect()
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
     // 배경 도로 중심축과 차량 위치를 하나의 기준으로 동기화
     val bgWidthRatio = 0.88f
     val roadCenterInBg = 0.66f
@@ -334,6 +396,8 @@ fun TeslaClusterScreen() {
     val carCenterYRatio = 0.66f
     val speedCenterXRatio = 0.175f
     val speedCenterYRatio = 0.54f
+
+    val bgHudBitmap = ImageBitmap.imageResource(id = R.drawable.bg_hud_road)
 
     BoxWithConstraints(
         modifier = Modifier
@@ -343,16 +407,26 @@ fun TeslaClusterScreen() {
         val screenW = maxWidth
         val screenH = maxHeight
 
-        // 1) 네온 시안 속도계 + 도로 오버레이 이미지 (고정)
-        Image(
-            painter = painterResource(id = R.drawable.bg_hud_road),
-            contentDescription = "HUD Road Background",
-            contentScale = ContentScale.FillBounds,
+        // 0) 실시간 날씨 연동 하늘 배경 (맑음/구름/비/눈)
+        WeatherSkyBackground(
+            weather = activeWeather,
+            elapsedSec = elapsedSec,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // 1) 네온 시안 속도계 + 도로 오버레이 (BlendMode.Screen으로 검정 배경을 투명 합성)
+        Canvas(
             modifier = Modifier
                 .align(Alignment.CenterStart)
                 .fillMaxHeight()
                 .fillMaxWidth(bgWidthRatio)
-        )
+        ) {
+            drawImage(
+                image = bgHudBitmap,
+                dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                blendMode = BlendMode.Screen
+            )
+        }
 
         // 2) 속도에 맞춰 회전하는 속도계 바늘 오버레이 (최고 속도 200 km/h)
         SpeedGaugeNeedleOverlay(
@@ -402,6 +476,16 @@ fun TeslaClusterScreen() {
                 painter = painterResource(id = R.drawable.car_model3),
                 contentDescription = "Tesla Model 3 Highland",
                 contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        // 4-1) 비/눈 전경 파티클 효과 (속도에 따라 빗줄기 각도 반응)
+        if (activeWeather == WeatherType.RAIN || activeWeather == WeatherType.SNOW) {
+            WeatherPrecipitationOverlay(
+                weather = activeWeather,
+                speed = smoothSpeedKmh,
+                elapsedSec = elapsedSec,
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -487,7 +571,36 @@ fun TeslaClusterScreen() {
                     )
                 }
 
+                // 우측 상단: 날씨 표시(터치로 맑음/구름/비/눈 테스트 가능) + GPS 상태
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val tempText = temperatureC?.let { " ${it}°C" } ?: ""
+                    val modeTag = if (manualWeather != null) " (TEST)" else ""
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .background(Color(0x990F172A), RoundedCornerShape(12.dp))
+                            .border(1.dp, Color(0x5538BDF8), RoundedCornerShape(12.dp))
+                            .clickable {
+                                manualWeather = when (manualWeather) {
+                                    null -> WeatherType.CLEAR
+                                    WeatherType.CLEAR -> WeatherType.CLOUDY
+                                    WeatherType.CLOUDY -> WeatherType.RAIN
+                                    WeatherType.RAIN -> WeatherType.SNOW
+                                    WeatherType.SNOW -> null
+                                }
+                            }
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = "${activeWeather.icon} ${activeWeather.label}$tempText$modeTag",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
                     Box(
                         modifier = Modifier
                             .size(9.dp)
@@ -568,6 +681,182 @@ fun TeslaClusterScreen() {
                     fontWeight = FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+private fun mapWeatherCode(code: Int): WeatherType = when (code) {
+    0, 1 -> WeatherType.CLEAR
+    2, 3, 45, 48 -> WeatherType.CLOUDY
+    71, 73, 75, 77, 85, 86 -> WeatherType.SNOW
+    else -> WeatherType.RAIN
+}
+
+@Composable
+fun WeatherSkyBackground(
+    weather: WeatherType,
+    elapsedSec: Float,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val horizonY = h * 0.48f
+
+        val skyColors = when (weather) {
+            WeatherType.CLEAR -> listOf(
+                Color(0xFF0A3D7A),
+                Color(0xFF1A6BB5),
+                Color(0xFF071A30),
+                Color(0xFF000000)
+            )
+            WeatherType.CLOUDY -> listOf(
+                Color(0xFF2B3544),
+                Color(0xFF3E4C5E),
+                Color(0xFF141B24),
+                Color(0xFF000000)
+            )
+            WeatherType.RAIN -> listOf(
+                Color(0xFF141B26),
+                Color(0xFF233042),
+                Color(0xFF0C121A),
+                Color(0xFF000000)
+            )
+            WeatherType.SNOW -> listOf(
+                Color(0xFF283747),
+                Color(0xFF425466),
+                Color(0xFF131B24),
+                Color(0xFF000000)
+            )
+        }
+
+        drawRect(
+            brush = Brush.verticalGradient(
+                colorStops = arrayOf(
+                    0.0f to skyColors[0],
+                    0.26f to skyColors[1],
+                    0.46f to skyColors[2],
+                    0.62f to skyColors[3]
+                ),
+                startY = 0f,
+                endY = h
+            )
+        )
+
+        when (weather) {
+            WeatherType.CLEAR -> {
+                // 도로 지평선 위쪽 태양 + 은은한 후광
+                val sunCenter = Offset(w * 0.62f, h * 0.17f)
+                val pulse = 1f + sin(elapsedSec * 1.5f) * 0.04f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFFFFF7CC).copy(alpha = 0.95f),
+                            Color(0xFFFFD54F).copy(alpha = 0.50f),
+                            Color(0xFF38BDF8).copy(alpha = 0.15f),
+                            Color.Transparent
+                        ),
+                        center = sunCenter,
+                        radius = h * 0.24f * pulse
+                    ),
+                    center = sunCenter,
+                    radius = h * 0.24f * pulse
+                )
+                drawCircle(
+                    color = Color(0xFFFFFBE6),
+                    center = sunCenter,
+                    radius = h * 0.042f
+                )
+            }
+
+            WeatherType.CLOUDY, WeatherType.RAIN, WeatherType.SNOW -> {
+                // 흘러가는 구름 레이어
+                val cloudBaseColor = when (weather) {
+                    WeatherType.RAIN -> Color(0xFF1E293B).copy(alpha = 0.85f)
+                    WeatherType.SNOW -> Color(0xFFCBD5E1).copy(alpha = 0.35f)
+                    else -> Color(0xFFE2E8F0).copy(alpha = 0.38f)
+                }
+                val drift = (elapsedSec * 14f) % (w * 1.4f)
+                for (i in 0..4) {
+                    val baseX = ((i * w * 0.28f) + drift) % (w * 1.4f) - w * 0.2f
+                    val baseY = h * (0.10f + (i % 3) * 0.08f)
+                    val cw = w * (0.18f + (i % 2) * 0.07f)
+                    val ch = h * 0.09f
+                    drawOval(
+                        color = cloudBaseColor,
+                        topLeft = Offset(baseX, baseY),
+                        size = Size(cw, ch)
+                    )
+                    drawOval(
+                        color = cloudBaseColor,
+                        topLeft = Offset(baseX + cw * 0.25f, baseY - ch * 0.35f),
+                        size = Size(cw * 0.65f, ch * 0.9f)
+                    )
+                }
+            }
+        }
+
+        // 지평선 아래는 어둡게 정리해서 도로 네온 대비 유지
+        drawRect(
+            brush = Brush.verticalGradient(
+                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f)),
+                startY = horizonY * 0.7f,
+                endY = horizonY * 1.25f
+            ),
+            topLeft = Offset(0f, horizonY * 0.7f),
+            size = Size(w, horizonY * 0.55f)
+        )
+    }
+}
+
+@Composable
+fun WeatherPrecipitationOverlay(
+    weather: WeatherType,
+    speed: Float,
+    elapsedSec: Float,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val speedFactor = (speed / 120f).coerceIn(0f, 1.5f)
+
+        if (weather == WeatherType.RAIN) {
+            val dropCount = 55
+            for (i in 0 until dropCount) {
+                val seed = i * 97.31f
+                val fallSpeed = 0.75f + (i % 5) * 0.14f + speedFactor * 0.35f
+                val progress = ((elapsedSec * fallSpeed) + (seed % 1f)) % 1f
+                val x = ((seed * 13.7f) % w) - progress * (18f + speedFactor * 45f)
+                val y = progress * h
+                val len = 14f + (i % 4) * 5f + speedFactor * 10f
+                val slant = 4f + speedFactor * 10f
+
+                drawLine(
+                    color = Color(0xFFBAE6FD).copy(alpha = 0.35f + (i % 3) * 0.12f),
+                    start = Offset(x, y),
+                    end = Offset(x - slant, y + len),
+                    strokeWidth = 1.4.dp.toPx(),
+                    cap = StrokeCap.Round
+                )
+            }
+        } else if (weather == WeatherType.SNOW) {
+            val flakeCount = 45
+            for (i in 0 until flakeCount) {
+                val seed = i * 61.17f
+                val fallSpeed = 0.14f + (i % 4) * 0.04f
+                val progress = ((elapsedSec * fallSpeed) + (seed % 1f)) % 1f
+                val sway = sin(elapsedSec * 2f + i) * 18f
+                val x = ((seed * 19.3f) % w) + sway
+                val y = progress * h
+                val r = (1.8f + (i % 3) * 1.1f).dp.toPx()
+
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.45f + (i % 3) * 0.15f),
+                    center = Offset(x, y),
+                    radius = r
                 )
             }
         }
@@ -658,7 +947,6 @@ fun AlignedForwardRoadOverlay(
 
         for (i in 0 until dashCount) {
             val rawT = ((i.toFloat() / dashCount) + scrollPhase) % 1f
-            // 원근 가속: 멀리서 촘촘하게 출발해 차 가까이 올수록 길고 빠르게 통과
             val p1 = rawT * rawT
             val dashLen = (0.045f + 0.045f * intensity) * (0.35f + rawT)
             val p2 = (rawT + dashLen).coerceAtMost(1f).let { it * it }

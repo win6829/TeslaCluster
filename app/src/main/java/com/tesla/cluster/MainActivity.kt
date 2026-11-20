@@ -16,12 +16,11 @@ import android.os.Looper
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -53,12 +52,16 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 앱 실행 중 화면이 꺼지지 않도록 유지
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent {
             TeslaClusterScreen()
         }
@@ -99,7 +102,9 @@ class MainActivity : ComponentActivity() {
 fun TeslaClusterScreen() {
     val context = LocalContext.current
 
-    var currentSpeedKmh by remember { mutableFloatStateOf(0f) }
+    var targetSpeedKmh by remember { mutableFloatStateOf(0f) }
+    var smoothSpeedKmh by remember { mutableFloatStateOf(0f) }
+    var displayedSpeedInt by remember { mutableIntStateOf(0) }
     var totalDistanceMeters by remember { mutableFloatStateOf(0f) }
     var lastLocation by remember { mutableStateOf<Location?>(null) }
     var currentAddress by remember { mutableStateOf("위치 수신 대기 중...") }
@@ -147,13 +152,43 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 2. 속도에 연동된 3D 도로 차선 흐르는 애니메이션
-    LaunchedEffect(currentSpeedKmh) {
+    // 2. 60fps 프레임 루프: 속도계 보간, 1씩 부드러운 숫자 변경, 도로 차선 애니메이션
+    LaunchedEffect(Unit) {
+        var lastFrameNs = System.nanoTime()
         while (true) {
-            if (currentSpeedKmh > 1.5f) {
-                val step = (currentSpeedKmh / 2200f).coerceIn(0.005f, 0.065f)
-                roadPhase = (roadPhase + step) % 1f
+            val nowNs = System.nanoTime()
+            val dtSec = ((nowNs - lastFrameNs) / 1_000_000_000.0).toFloat().coerceIn(0.001f, 0.05f)
+            lastFrameNs = nowNs
+
+            val clampedTarget = targetSpeedKmh.coerceIn(0f, 200f)
+            val diff = clampedTarget - smoothSpeedKmh
+
+            if (abs(diff) < 0.02f) {
+                smoothSpeedKmh = clampedTarget
+            } else {
+                // 지수 보간으로 GPS 수신 사이 공백(500ms)에도 끊김 없이 연속 이동
+                val alpha = (1f - kotlin.math.exp(-7.5f * dtSec)).coerceIn(0f, 1f)
+                smoothSpeedKmh += diff * alpha
             }
+
+            // 숫자가 2 이상 차이날 때 1씩 단계적으로 증가/감소하여 자연스럽게 변경
+            val roundedTarget = smoothSpeedKmh.roundToInt()
+            when {
+                displayedSpeedInt < roundedTarget -> {
+                    val step = if (roundedTarget - displayedSpeedInt > 15) 2 else 1
+                    displayedSpeedInt = (displayedSpeedInt + step).coerceAtMost(roundedTarget)
+                }
+                displayedSpeedInt > roundedTarget -> {
+                    val step = if (displayedSpeedInt - roundedTarget > 15) 2 else 1
+                    displayedSpeedInt = (displayedSpeedInt - step).coerceAtLeast(roundedTarget)
+                }
+            }
+
+            if (smoothSpeedKmh > 1.2f) {
+                val laneSpeed = (smoothSpeedKmh / 36f) * dtSec
+                roadPhase = (roadPhase + laneSpeed) % 1f
+            }
+
             delay(16L)
         }
     }
@@ -205,7 +240,7 @@ fun TeslaClusterScreen() {
             override fun onLocationResult(result: LocationResult) {
                 val loc = result.lastLocation ?: return
                 val speed = if (loc.hasSpeed()) loc.speed * 3.6f else 0f
-                currentSpeedKmh = if (speed < 1.5f) 0f else speed
+                targetSpeedKmh = if (speed < 1.5f) 0f else speed
 
                 lastLocation?.let { prev ->
                     if (loc.accuracy < 25f) {
@@ -222,7 +257,7 @@ fun TeslaClusterScreen() {
         if (fusedClient != null) {
             try {
                 val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 500L)
-                    .setMinUpdateIntervalMillis(300L)
+                    .setMinUpdateIntervalMillis(250L)
                     .build()
                 fusedClient.requestLocationUpdates(locationRequest, callback, Looper.getMainLooper())
             } catch (_: Exception) {
@@ -266,19 +301,13 @@ fun TeslaClusterScreen() {
         }
     }
 
-    val animatedSpeed by animateFloatAsState(
-        targetValue = currentSpeedKmh.coerceIn(0f, 200f),
-        animationSpec = tween(durationMillis = 250),
-        label = "speedAnim"
-    )
-
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF000000))
     ) {
         Model3DrivingCanvas(
-            speed = animatedSpeed,
+            speed = smoothSpeedKmh,
             roadPhase = roadPhase,
             modifier = Modifier.fillMaxSize()
         )
@@ -355,13 +384,13 @@ fun TeslaClusterScreen() {
                     contentAlignment = Alignment.Center
                 ) {
                     SegmentedSpeedGauge(
-                        speed = animatedSpeed,
+                        speed = smoothSpeedKmh,
                         maxSpeed = 160f,
                         modifier = Modifier.fillMaxSize()
                     )
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            text = "${animatedSpeed.toInt()}",
+                            text = "$displayedSpeedInt",
                             color = Color.White,
                             fontSize = 72.sp,
                             fontWeight = FontWeight.Bold,
@@ -454,7 +483,7 @@ fun SegmentedSpeedGauge(
         val totalSweep = 270f
         val tickCount = 36
         val progress = (speed / maxSpeed).coerceIn(0f, 1f)
-        val activeTicks = (tickCount * progress).toInt()
+        val activeTicks = (tickCount * progress).roundToInt()
 
         for (i in 0..tickCount) {
             val t = i.toFloat() / tickCount
@@ -587,7 +616,7 @@ fun Model3DrivingCanvas(
         for (ratio in laneRatios) {
             val topX = cx + outerTopW * ratio
             val botX = cx + outerBotW * ratio
-            val isOuter = kotlin.math.abs(ratio) > 0.9f
+            val isOuter = abs(ratio) > 0.9f
 
             drawLine(
                 brush = Brush.verticalGradient(

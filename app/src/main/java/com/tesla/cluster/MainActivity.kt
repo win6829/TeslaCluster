@@ -248,7 +248,6 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 바늘 각도와 표시 숫자를 동일한 smoothSpeedKmh 기준으로 동기화
     val displayedSpeedInt = smoothSpeedKmh.roundToInt().coerceIn(0, 240)
 
     DisposableEffect(context) {
@@ -450,7 +449,6 @@ fun TeslaClusterScreen() {
                 )
             }
 
-            // 240 km/h 기준 바늘 (실기 눈금 위치에 맞춰 startAngleDeg / sweepAngleDeg 조정 가능)
             SpeedGaugeNeedleOverlay(
                 speed = smoothSpeedKmh,
                 maxSpeed = 240f,
@@ -910,9 +908,9 @@ fun WeatherSkyBackground(
         val skyColors = if (isDay) {
             when (weather) {
                 WeatherType.CLEAR -> listOf(Color(0xFF1565C0), Color(0xFF42A5F5), Color(0xFF0D2E54), Color(0xFF000000))
-                WeatherType.CLOUDY -> listOf(Color(0xFF4B5E70), Color(0xFF6B7F91), Color(0xFF212B36), Color(0xFF000000))
-                WeatherType.RAIN -> listOf(Color(0xFF2C3845), Color(0xFF404F5E), Color(0xFF151C24), Color(0xFF000000))
-                WeatherType.SNOW -> listOf(Color(0xFF546A7B), Color(0xFF7B90A0), Color(0xFF1E2933), Color(0xFF000000))
+                WeatherType.CLOUDY -> listOf(Color(0xFF334155), Color(0xFF475569), Color(0xFF1E293B), Color(0xFF000000))
+                WeatherType.RAIN -> listOf(Color(0xFF1E293B), Color(0xFF334155), Color(0xFF0F172A), Color(0xFF000000))
+                WeatherType.SNOW -> listOf(Color(0xFF475569), Color(0xFF64748B), Color(0xFF1E293B), Color(0xFF000000))
             }
         } else {
             when (weather) {
@@ -939,6 +937,7 @@ fun WeatherSkyBackground(
         if (isDay) {
             when (weather) {
                 WeatherType.CLEAR -> {
+                    // 낮 맑음: 빛나는 태양 + 은은한 햇살 후광 + 하얀 3D 뭉게구름
                     val sunCenter = Offset(w * 0.62f, h * 0.17f)
                     val pulse = 1f + sin(elapsedSec * 1.5f) * 0.04f
                     drawCircle(
@@ -956,31 +955,35 @@ fun WeatherSkyBackground(
                         radius = h * 0.26f * pulse
                     )
                     drawCircle(color = Color(0xFFFFFDE7), center = sunCenter, radius = h * 0.044f)
+
+                    // 맑은 날 하얀 뭉게구름
+                    val drift = (elapsedSec * 14f) % (w + 340f)
+                    val whiteShadow = Color(0xFFCFDCEB).copy(alpha = 0.65f)
+                    val whiteBody = Color(0xFFF8FAFC).copy(alpha = 0.90f)
+                    val whiteHi = Color(0xFFFFFFFF).copy(alpha = 0.98f)
+                    drawVolumetricCumulus(((drift) % (w + 340f)) - 170f, h * 0.20f, 0.85f, whiteShadow, whiteBody, whiteHi)
+                    drawVolumetricCumulus(((drift + (w + 340f) * 0.48f) % (w + 340f)) - 170f, h * 0.15f, 0.72f, whiteShadow, whiteBody, whiteHi)
                 }
 
                 WeatherType.CLOUDY, WeatherType.RAIN, WeatherType.SNOW -> {
+                    // 구름/흐림/비: 묵직한 먹구름
                     val (shadowC, bodyC, hiC) = when (weather) {
-                        WeatherType.RAIN -> Triple(
-                            Color(0xFF1A232B).copy(alpha = 0.85f),
-                            Color(0xFF37474F).copy(alpha = 0.85f),
-                            Color(0xFF607D8B).copy(alpha = 0.65f)
-                        )
                         WeatherType.SNOW -> Triple(
-                            Color(0xFF94A3B8).copy(alpha = 0.70f),
-                            Color(0xFFE2E8F0).copy(alpha = 0.85f),
-                            Color(0xFFFFFFFF).copy(alpha = 0.92f)
+                            Color(0xFF475569).copy(alpha = 0.80f),
+                            Color(0xFF94A3B8).copy(alpha = 0.85f),
+                            Color(0xFFCBD5E1).copy(alpha = 0.85f)
                         )
                         else -> Triple(
-                            Color(0xFF90A4AE).copy(alpha = 0.72f),
-                            Color(0xFFECEFF1).copy(alpha = 0.88f),
-                            Color(0xFFFFFFFF).copy(alpha = 0.95f)
+                            Color(0xFF1A232E).copy(alpha = 0.92f),
+                            Color(0xFF334155).copy(alpha = 0.90f),
+                            Color(0xFF64748B).copy(alpha = 0.72f)
                         )
                     }
                     val drift = (elapsedSec * 18f) % (w + 340f)
                     for (i in 0..3) {
-                        val bx = ((i * w * 0.32f) + drift) % (w + 340f) - 170f
-                        val by = h * (0.14f + (i % 2) * 0.09f)
-                        drawVolumetricCumulus(bx, by, 0.95f + (i % 2) * 0.25f, shadowC, bodyC, hiC)
+                        val bx = ((i * w * 0.30f) + drift) % (w + 340f) - 170f
+                        val by = h * (0.14f + (i % 2) * 0.08f)
+                        drawVolumetricCumulus(bx, by, 1.05f + (i % 2) * 0.25f, shadowC, bodyC, hiC)
                     }
                 }
             }
@@ -1022,15 +1025,15 @@ fun WeatherSkyBackground(
 
                 WeatherType.CLOUDY, WeatherType.RAIN, WeatherType.SNOW -> {
                     val (shadowC, bodyC, hiC) = Triple(
-                        Color(0xFF0F172A).copy(alpha = 0.85f),
-                        Color(0xFF253245).copy(alpha = 0.80f),
-                        Color(0xFF475569).copy(alpha = 0.55f)
+                        Color(0xFF0F172A).copy(alpha = 0.88f),
+                        Color(0xFF1E293B).copy(alpha = 0.85f),
+                        Color(0xFF334155).copy(alpha = 0.60f)
                     )
                     val drift = (elapsedSec * 14f) % (w + 340f)
                     for (i in 0..3) {
-                        val bx = ((i * w * 0.32f) + drift) % (w + 340f) - 170f
-                        val by = h * (0.14f + (i % 2) * 0.09f)
-                        drawVolumetricCumulus(bx, by, 0.95f + (i % 2) * 0.25f, shadowC, bodyC, hiC)
+                        val bx = ((i * w * 0.30f) + drift) % (w + 340f) - 170f
+                        val by = h * (0.14f + (i % 2) * 0.08f)
+                        drawVolumetricCumulus(bx, by, 1.05f + (i % 2) * 0.25f, shadowC, bodyC, hiC)
                     }
                 }
             }
@@ -1048,6 +1051,9 @@ fun WeatherSkyBackground(
     }
 }
 
+/**
+ * [테마 2] 낮 맑음(하얀 구름 + 맑은 하늘 + 태양/후광) vs 낮 구름/흐림(먹구름)
+ */
 @Composable
 fun Theme2SkyBackground(
     weather: WeatherType,
@@ -1060,24 +1066,126 @@ fun Theme2SkyBackground(
         val h = size.height
 
         val skyColors = if (isDay) {
-            listOf(Color(0xFFD6E9FF), Color(0xFFF5F9FF))
+            when (weather) {
+                WeatherType.CLEAR -> listOf(Color(0xFF64B5F6), Color(0xFFBBDEFB), Color(0xFFF5FAFF))
+                WeatherType.CLOUDY -> listOf(Color(0xFF64748B), Color(0xFF94A3B8), Color(0xFFE2E8F0))
+                WeatherType.RAIN -> listOf(Color(0xFF475569), Color(0xFF78909C), Color(0xFFCBD5E1))
+                WeatherType.SNOW -> listOf(Color(0xFF94A3B8), Color(0xFFCBD5E1), Color(0xFFF8FAFC))
+            }
         } else {
-            listOf(Color(0xFF000000), Color(0xFF040B1A))
+            when (weather) {
+                WeatherType.CLEAR -> listOf(Color(0xFF000000), Color(0xFF040B1A))
+                WeatherType.CLOUDY -> listOf(Color(0xFF090E17), Color(0xFF162032))
+                WeatherType.RAIN -> listOf(Color(0xFF05080F), Color(0xFF0E1624))
+                WeatherType.SNOW -> listOf(Color(0xFF0A111D), Color(0xFF1A2638))
+            }
         }
         drawRect(brush = Brush.verticalGradient(skyColors))
 
-        val shadowColor = if (isDay) Color(0xFFB5C7DC).copy(alpha = 0.75f) else Color(0xFF172030).copy(alpha = 0.72f)
-        val bodyColor = if (isDay) Color(0xFFEAF1F8).copy(alpha = 0.92f) else Color(0xFF283448).copy(alpha = 0.78f)
-        val highlightColor = if (isDay) Color(0xFFFFFFFF).copy(alpha = 0.98f) else Color(0xFF435570).copy(alpha = 0.65f)
+        if (isDay) {
+            if (weather == WeatherType.CLEAR) {
+                // 낮 맑음: 빛나는 태양 + 은은한 햇살 후광
+                val sunCenter = Offset(w * 0.65f, h * 0.22f)
+                val pulse = 1f + sin(elapsedSec * 1.4f) * 0.03f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(
+                            Color(0xFFFFF59D).copy(alpha = 0.90f),
+                            Color(0xFFFFD54F).copy(alpha = 0.42f),
+                            Color(0xFF90CAF9).copy(alpha = 0.16f),
+                            Color.Transparent
+                        ),
+                        center = sunCenter,
+                        radius = h * 0.36f * pulse
+                    ),
+                    center = sunCenter,
+                    radius = h * 0.36f * pulse
+                )
+                drawCircle(
+                    color = Color(0xFFFFFDE7),
+                    center = sunCenter,
+                    radius = h * 0.062f
+                )
 
-        val drift = (elapsedSec * 15f) % (w + 320f)
-        val shift1 = drift - 160f
-        val shift2 = ((drift + (w + 320f) * 0.35f) % (w + 320f)) - 160f
-        val shift3 = ((drift + (w + 320f) * 0.68f) % (w + 320f)) - 160f
+                // 맑은 날 하얀 3D 뭉게구름
+                val whiteShadow = Color(0xFFCADAE8).copy(alpha = 0.65f)
+                val whiteBody = Color(0xFFF5F9FD).copy(alpha = 0.94f)
+                val whiteHi = Color(0xFFFFFFFF).copy(alpha = 1.0f)
 
-        drawVolumetricCumulus(shift1, h * 0.25f, 1.15f, shadowColor, bodyColor, highlightColor)
-        drawVolumetricCumulus(shift2, h * 0.18f, 0.90f, shadowColor, bodyColor, highlightColor)
-        drawVolumetricCumulus(shift3, h * 0.31f, 1.25f, shadowColor, bodyColor, highlightColor)
+                val drift = (elapsedSec * 13f) % (w + 320f)
+                val shift1 = drift - 160f
+                val shift2 = ((drift + (w + 320f) * 0.45f) % (w + 320f)) - 160f
+
+                drawVolumetricCumulus(shift1, h * 0.26f, 0.95f, whiteShadow, whiteBody, whiteHi)
+                drawVolumetricCumulus(shift2, h * 0.18f, 0.80f, whiteShadow, whiteBody, whiteHi)
+            } else {
+                // 구름/흐림/비: 묵직한 먹구름
+                val (shadowC, bodyC, hiC) = when (weather) {
+                    WeatherType.SNOW -> Triple(
+                        Color(0xFF64748B).copy(alpha = 0.80f),
+                        Color(0xFF94A3B8).copy(alpha = 0.88f),
+                        Color(0xFFE2E8F0).copy(alpha = 0.90f)
+                    )
+                    WeatherType.RAIN -> Triple(
+                        Color(0xFF1E293B).copy(alpha = 0.92f),
+                        Color(0xFF334155).copy(alpha = 0.90f),
+                        Color(0xFF64748B).copy(alpha = 0.78f)
+                    )
+                    else -> Triple(
+                        Color(0xFF283546).copy(alpha = 0.90f),
+                        Color(0xFF475569).copy(alpha = 0.88f),
+                        Color(0xFF78909C).copy(alpha = 0.78f)
+                    )
+                }
+                val drift = (elapsedSec * 16f) % (w + 320f)
+                val shift1 = drift - 160f
+                val shift2 = ((drift + (w + 320f) * 0.30f) % (w + 320f)) - 160f
+                val shift3 = ((drift + (w + 320f) * 0.62f) % (w + 320f)) - 160f
+                val shift4 = ((drift + (w + 320f) * 0.85f) % (w + 320f)) - 160f
+
+                drawVolumetricCumulus(shift1, h * 0.24f, 1.20f, shadowC, bodyC, hiC)
+                drawVolumetricCumulus(shift2, h * 0.16f, 1.05f, shadowC, bodyC, hiC)
+                drawVolumetricCumulus(shift3, h * 0.29f, 1.30f, shadowC, bodyC, hiC)
+                drawVolumetricCumulus(shift4, h * 0.20f, 1.10f, shadowC, bodyC, hiC)
+            }
+        } else {
+            if (weather == WeatherType.CLEAR) {
+                for (i in 0 until 26) {
+                    val sx = ((i * 173.3f) % 0.94f + 0.03f) * w
+                    val sy = ((i * 89.7f) % 0.45f + 0.04f) * h
+                    val twinkle = (0.35f + 0.65f * ((sin(elapsedSec * (1.5f + (i % 4) * 0.7f) + i) + 1f) * 0.5f))
+                    drawCircle(
+                        color = Color(0xFFE2F1FF).copy(alpha = twinkle),
+                        center = Offset(sx, sy),
+                        radius = (0.9f + (i % 3) * 0.5f).dp.toPx()
+                    )
+                }
+                val moonCenter = Offset(w * 0.65f, h * 0.22f)
+                val moonR = h * 0.058f
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        colors = listOf(Color(0xFFFFF8DC).copy(alpha = 0.45f), Color.Transparent),
+                        center = moonCenter,
+                        radius = moonR * 3.5f
+                    ),
+                    center = moonCenter,
+                    radius = moonR * 3.5f
+                )
+                drawCircle(color = Color(0xFFFFFBEB), center = moonCenter, radius = moonR)
+            } else {
+                val shadowC = Color(0xFF0B111C).copy(alpha = 0.88f)
+                val bodyC = Color(0xFF1E293B).copy(alpha = 0.85f)
+                val hiC = Color(0xFF334155).copy(alpha = 0.68f)
+                val drift = (elapsedSec * 14f) % (w + 320f)
+                val shift1 = drift - 160f
+                val shift2 = ((drift + (w + 320f) * 0.35f) % (w + 320f)) - 160f
+                val shift3 = ((drift + (w + 320f) * 0.68f) % (w + 320f)) - 160f
+
+                drawVolumetricCumulus(shift1, h * 0.25f, 1.20f, shadowC, bodyC, hiC)
+                drawVolumetricCumulus(shift2, h * 0.18f, 1.00f, shadowC, bodyC, hiC)
+                drawVolumetricCumulus(shift3, h * 0.30f, 1.30f, shadowC, bodyC, hiC)
+            }
+        }
     }
 }
 

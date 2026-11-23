@@ -131,8 +131,18 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun TeslaClusterScreen() {
     val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("tesla_cluster_prefs", Context.MODE_PRIVATE) }
 
-    var currentTheme by remember { mutableStateOf(ClusterTheme.ORIGINAL) }
+    // 마지막으로 사용한 테마 불러오기
+    var currentTheme by remember {
+        val savedName = prefs.getString("last_theme", ClusterTheme.ORIGINAL.name)
+        val restoredTheme = try {
+            ClusterTheme.valueOf(savedName ?: ClusterTheme.ORIGINAL.name)
+        } catch (_: Exception) {
+            ClusterTheme.ORIGINAL
+        }
+        mutableStateOf(restoredTheme)
+    }
     val currentMaxSpeed = 240f
 
     var gpsSpeedKmh by remember { mutableFloatStateOf(0f) }
@@ -392,12 +402,15 @@ fun TeslaClusterScreen() {
         }
     }
 
+    // 테마 전환 시 즉시 기기에 저장
     val toggleTheme = {
-        currentTheme = if (currentTheme == ClusterTheme.ORIGINAL) {
+        val nextTheme = if (currentTheme == ClusterTheme.ORIGINAL) {
             ClusterTheme.NEON_IONIQ
         } else {
             ClusterTheme.ORIGINAL
         }
+        currentTheme = nextTheme
+        prefs.edit().putString("last_theme", nextTheme.name).apply()
     }
 
     val toggleTestDrive = {
@@ -937,7 +950,6 @@ fun WeatherSkyBackground(
         if (isDay) {
             when (weather) {
                 WeatherType.CLEAR -> {
-                    // 낮 맑음: 빛나는 태양 + 은은한 햇살 후광 + 하얀 3D 뭉게구름
                     val sunCenter = Offset(w * 0.62f, h * 0.17f)
                     val pulse = 1f + sin(elapsedSec * 1.5f) * 0.04f
                     drawCircle(
@@ -956,7 +968,6 @@ fun WeatherSkyBackground(
                     )
                     drawCircle(color = Color(0xFFFFFDE7), center = sunCenter, radius = h * 0.044f)
 
-                    // 맑은 날 하얀 뭉게구름
                     val drift = (elapsedSec * 14f) % (w + 340f)
                     val whiteShadow = Color(0xFFCFDCEB).copy(alpha = 0.65f)
                     val whiteBody = Color(0xFFF8FAFC).copy(alpha = 0.90f)
@@ -966,7 +977,6 @@ fun WeatherSkyBackground(
                 }
 
                 WeatherType.CLOUDY, WeatherType.RAIN, WeatherType.SNOW -> {
-                    // 구름/흐림/비: 묵직한 먹구름
                     val (shadowC, bodyC, hiC) = when (weather) {
                         WeatherType.SNOW -> Triple(
                             Color(0xFF475569).copy(alpha = 0.80f),
@@ -1051,9 +1061,6 @@ fun WeatherSkyBackground(
     }
 }
 
-/**
- * [테마 2] 낮 맑음(하얀 구름 + 맑은 하늘 + 태양/후광) vs 낮 구름/흐림(먹구름)
- */
 @Composable
 fun Theme2SkyBackground(
     weather: WeatherType,
@@ -1084,7 +1091,6 @@ fun Theme2SkyBackground(
 
         if (isDay) {
             if (weather == WeatherType.CLEAR) {
-                // 낮 맑음: 빛나는 태양 + 은은한 햇살 후광
                 val sunCenter = Offset(w * 0.65f, h * 0.22f)
                 val pulse = 1f + sin(elapsedSec * 1.4f) * 0.03f
                 drawCircle(
@@ -1107,7 +1113,6 @@ fun Theme2SkyBackground(
                     radius = h * 0.062f
                 )
 
-                // 맑은 날 하얀 3D 뭉게구름
                 val whiteShadow = Color(0xFFCADAE8).copy(alpha = 0.65f)
                 val whiteBody = Color(0xFFF5F9FD).copy(alpha = 0.94f)
                 val whiteHi = Color(0xFFFFFFFF).copy(alpha = 1.0f)
@@ -1119,7 +1124,6 @@ fun Theme2SkyBackground(
                 drawVolumetricCumulus(shift1, h * 0.26f, 0.95f, whiteShadow, whiteBody, whiteHi)
                 drawVolumetricCumulus(shift2, h * 0.18f, 0.80f, whiteShadow, whiteBody, whiteHi)
             } else {
-                // 구름/흐림/비: 묵직한 먹구름
                 val (shadowC, bodyC, hiC) = when (weather) {
                     WeatherType.SNOW -> Triple(
                         Color(0xFF64748B).copy(alpha = 0.80f),

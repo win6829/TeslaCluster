@@ -71,7 +71,6 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.roundToInt
@@ -92,7 +91,6 @@ enum class ClusterTheme {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 앱 실행 중 화면 꺼짐 방지
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent {
             TeslaClusterScreen()
@@ -134,7 +132,6 @@ class MainActivity : ComponentActivity() {
 fun TeslaClusterScreen() {
     val context = LocalContext.current
 
-    // 테마 상태 (차량 터치 시 ORIGINAL <-> NEON_IONIQ 전환)
     var currentTheme by remember { mutableStateOf(ClusterTheme.ORIGINAL) }
     val currentMaxSpeed = 240f
 
@@ -144,7 +141,6 @@ fun TeslaClusterScreen() {
     var testAccelerating by remember { mutableStateOf(true) }
 
     var smoothSpeedKmh by remember { mutableFloatStateOf(0f) }
-    var displayedSpeedInt by remember { mutableIntStateOf(0) }
     var roadScrollPhase by remember { mutableFloatStateOf(0f) }
     var elapsedSec by remember { mutableFloatStateOf(0f) }
 
@@ -157,7 +153,6 @@ fun TeslaClusterScreen() {
     var batteryPct by remember { mutableIntStateOf(88) }
     var isCharging by remember { mutableStateOf(true) }
 
-    // 대분류(낮/밤) + 소분류(날씨) 상태 및 수동 테스트 오버라이드
     val initialIsDay = remember {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         hour in 6..18
@@ -199,7 +194,6 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 1. 시계 (1초 갱신)
     LaunchedEffect(Unit) {
         val timeFormat = SimpleDateFormat("HH:mm", Locale.KOREA)
         val dateFormat = SimpleDateFormat("M월 d일 (E)", Locale.KOREA)
@@ -211,11 +205,9 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 2. 60fps 루프: 테스트 주행(0~240) + 부드러운 속도 보간 + 도로/날씨 모션
     val latestMaxSpeed by rememberUpdatedState(currentMaxSpeed)
     LaunchedEffect(Unit) {
         var lastFrameNs = System.nanoTime()
-        var digitStepAccumSec = 0f
 
         while (true) {
             val nowNs = System.nanoTime()
@@ -241,30 +233,8 @@ fun TeslaClusterScreen() {
             val rawTarget = if (isTestDriving) testSpeedKmh else gpsSpeedKmh
             val clampedTarget = rawTarget.coerceIn(0f, maxSpd)
 
-            val diff = clampedTarget - smoothSpeedKmh
-            if (abs(diff) < 0.01f) {
-                smoothSpeedKmh = clampedTarget
-            } else {
-                val alpha = (1f - exp(-6.5f * dtSec)).coerceIn(0f, 1f)
-                smoothSpeedKmh += diff * alpha
-            }
-
-            val desiredInt = clampedTarget.toInt()
-            if (displayedSpeedInt != desiredInt) {
-                val stepInterval = (0.060f - (abs(desiredInt - displayedSpeedInt).coerceAtMost(40) * 0.0009f))
-                    .coerceIn(0.022f, 0.060f)
-                digitStepAccumSec += dtSec
-                while (digitStepAccumSec >= stepInterval && displayedSpeedInt != desiredInt) {
-                    digitStepAccumSec -= stepInterval
-                    if (displayedSpeedInt < desiredInt) {
-                        displayedSpeedInt += 1
-                    } else {
-                        displayedSpeedInt -= 1
-                    }
-                }
-            } else {
-                digitStepAccumSec = 0f
-            }
+            val alpha = (1f - exp(-12f * dtSec)).coerceIn(0f, 1f)
+            smoothSpeedKmh += (clampedTarget - smoothSpeedKmh) * alpha
 
             if (smoothSpeedKmh > 0.5f) {
                 val flowRate = (smoothSpeedKmh / 36f) * dtSec
@@ -278,7 +248,9 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 3. 배터리 잔량 수신
+    // 바늘 각도와 표시 숫자를 동일한 smoothSpeedKmh 기준으로 동기화
+    val displayedSpeedInt = smoothSpeedKmh.roundToInt().coerceIn(0, 240)
+
     DisposableEffect(context) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -311,7 +283,6 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 4. GPS 속도 및 주행거리 계산
     DisposableEffect(hasLocationPermission) {
         if (!hasLocationPermission) return@DisposableEffect onDispose {}
 
@@ -358,7 +329,6 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 5. 위치 주소 변환 (시/구/동·도로명까지 표시, 200m 이동 시 갱신)
     LaunchedEffect(lastLocation) {
         val loc = lastLocation ?: return@LaunchedEffect
         val prevGeo = lastGeocodedLocation
@@ -387,7 +357,6 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 6. 실시간 날씨 + 낮/밤 조회 (Open-Meteo 무료 API, 15분 또는 5km 이동 시 갱신)
     LaunchedEffect(lastLocation) {
         val loc = lastLocation ?: return@LaunchedEffect
         val nowMs = System.currentTimeMillis()
@@ -434,7 +403,7 @@ fun TeslaClusterScreen() {
 
     val toggleTestDrive = {
         if (!isTestDriving) {
-            testSpeedKmh = displayedSpeedInt.toFloat()
+            testSpeedKmh = smoothSpeedKmh
             testAccelerating = true
             isTestDriving = true
         } else {
@@ -442,9 +411,7 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 아이오닉 스타일 주/야간 배경색 (테마 2 전용)
     val isIoniqDayLight = (currentTheme == ClusterTheme.NEON_IONIQ && activeIsDay)
-
     val bgHudBitmap = ImageBitmap.imageResource(id = R.drawable.bg_hud_road)
 
     BoxWithConstraints(
@@ -456,9 +423,6 @@ fun TeslaClusterScreen() {
         val screenH = maxHeight
 
         if (currentTheme == ClusterTheme.ORIGINAL) {
-            // =========================================================
-            // [테마 1] 기존 클래식 테슬라 클러스터 (240km/h 기준 바늘 정렬 + 3D 뭉게구름)
-            // =========================================================
             val bgWidthRatio = 0.88f
             val roadCenterInBg = 0.66f
             val carCenterXRatio = bgWidthRatio * roadCenterInBg
@@ -466,7 +430,6 @@ fun TeslaClusterScreen() {
             val speedCenterXRatio = 0.175f
             val speedCenterYRatio = 0.54f
 
-            // 0) 하늘 배경 + 입체 뭉게구름
             WeatherSkyBackground(
                 weather = activeWeather,
                 isDay = activeIsDay,
@@ -474,7 +437,6 @@ fun TeslaClusterScreen() {
                 modifier = Modifier.fillMaxSize()
             )
 
-            // 1) 네온 시안 속도계 + 도로 오버레이
             Canvas(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
@@ -488,17 +450,20 @@ fun TeslaClusterScreen() {
                 )
             }
 
-            // 2) 속도계 바늘 (최고 속도 240 km/h 기준)
+            // 240 km/h 기준 바늘 (실기 눈금 위치에 맞춰 startAngleDeg / sweepAngleDeg 조정 가능)
             SpeedGaugeNeedleOverlay(
                 speed = smoothSpeedKmh,
                 maxSpeed = 240f,
+                centerXRatio = 0.198f,
+                centerYRatio = 0.54f,
+                startAngleDeg = -135f,
+                sweepAngleDeg = 270f,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .fillMaxHeight()
                     .fillMaxWidth(bgWidthRatio)
             )
 
-            // 3) 전진 도로 점선
             AlignedForwardRoadOverlay(
                 speed = smoothSpeedKmh,
                 scrollPhase = roadScrollPhase,
@@ -509,7 +474,6 @@ fun TeslaClusterScreen() {
                     .fillMaxWidth(bgWidthRatio)
             )
 
-            // 4) 중앙 테슬라 차량 (터치 시 테마 2로 전환)
             val carWidth = screenW * 0.175f
             val carHeight = carWidth * 0.68f
             Box(
@@ -544,7 +508,6 @@ fun TeslaClusterScreen() {
                 )
             }
 
-            // 5) 좌측 속도계 숫자 (터치 시 테스트 주행 토글)
             val speedBoxSize = 140.dp
             Box(
                 modifier = Modifier
@@ -576,9 +539,6 @@ fun TeslaClusterScreen() {
                 }
             }
         } else {
-            // =========================================================
-            // [테마 2] 네온 블루 고속도로 + 240km/h 그라데이션 + 우측 트립 + 아이오닉 주/야간
-            // =========================================================
             val bgTopColor by animateColorAsState(
                 targetValue = if (activeIsDay) Color(0xFFEAF2FA) else Color(0xFF020408),
                 animationSpec = tween(450), label = "t2_top"
@@ -593,7 +553,6 @@ fun TeslaClusterScreen() {
                     .fillMaxSize()
                     .background(Brush.verticalGradient(listOf(bgTopColor, bgBottomColor)))
             ) {
-                // 1) 상단 하늘 + 3D 입체 뭉게구름
                 Theme2SkyBackground(
                     weather = activeWeather,
                     isDay = activeIsDay,
@@ -603,7 +562,6 @@ fun TeslaClusterScreen() {
                         .fillMaxHeight(0.62f)
                 )
 
-                // 2) 하단 네온 블루 미래형 고속도로
                 NeonHighwayRoadCanvas(
                     roadOffset = roadScrollPhase,
                     isDay = activeIsDay,
@@ -613,7 +571,6 @@ fun TeslaClusterScreen() {
                         .align(Alignment.BottomCenter)
                 )
 
-                // 3) 중앙 테슬라 차량 (터치 시 테마 1로 전환)
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -644,7 +601,6 @@ fun TeslaClusterScreen() {
                     )
                 }
 
-                // 4) 좌측 240km/h 그라데이션 속도계 (터치 시 테스트 주행 토글)
                 GradientSpeedometer240(
                     speed = smoothSpeedKmh,
                     displayedSpeedInt = displayedSpeedInt,
@@ -658,7 +614,6 @@ fun TeslaClusterScreen() {
                         .size(275.dp)
                 )
 
-                // 5) 우측 원형 트립 계기판 (터치 시 리셋)
                 CircularTripGauge(
                     distanceKm = totalDistanceMeters / 1000f,
                     isDay = activeIsDay,
@@ -671,7 +626,6 @@ fun TeslaClusterScreen() {
             }
         }
 
-        // 비/눈 전경 파티클 효과 (테마 1, 2 공통)
         if (activeWeather == WeatherType.RAIN || activeWeather == WeatherType.SNOW) {
             WeatherPrecipitationOverlay(
                 weather = activeWeather,
@@ -682,9 +636,6 @@ fun TeslaClusterScreen() {
             )
         }
 
-        // =========================================================
-        // 공통 상단 바 / (테마1 전용 우측 Trip A 카드) / 하단 주소 바
-        // =========================================================
         val topPrimaryText = if (isIoniqDayLight) Color(0xFF161A20) else Color.White
         val topAccentText = if (isIoniqDayLight) Color(0xFF0284C7) else Color(0xFF22D3EE)
         val topChipBg = if (isIoniqDayLight) Color(0xD9FFFFFF) else Color(0x990F172A)
@@ -697,7 +648,6 @@ fun TeslaClusterScreen() {
                 .padding(horizontal = 28.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.SpaceBetween
         ) {
-            // 상단 바
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -731,7 +681,6 @@ fun TeslaClusterScreen() {
                     )
                 }
 
-                // 우측 상단: [낮/밤 토글] + [날씨 토글] + GPS 상태
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val dayNightLabel = if (activeIsDay) "☀️ 낮" else "🌙 밤"
                     val dayNightTag = if (manualIsDay != null) "*" else ""
@@ -806,7 +755,6 @@ fun TeslaClusterScreen() {
                 }
             }
 
-            // 테마 1일 때만 기존 우측 Trip A 사각 카드 표시 (테마 2는 우측 원형 트립 계기판 사용)
             if (currentTheme == ClusterTheme.ORIGINAL) {
                 Row(
                     modifier = Modifier
@@ -859,7 +807,6 @@ fun TeslaClusterScreen() {
                 Spacer(modifier = Modifier.weight(1f))
             }
 
-            // 하단 위치 표시
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
@@ -885,9 +832,6 @@ private fun mapWeatherCode(code: Int): WeatherType = when (code) {
     else -> WeatherType.RAIN
 }
 
-/**
- * 3D 입체 뭉게구름 공통 드로잉 함수 (하단 그림자 + 중간 볼륨 + 상단 하이라이트)
- */
 private fun DrawScope.drawVolumetricCumulus(
     baseX: Float,
     baseY: Float,
@@ -951,9 +895,6 @@ private fun DrawScope.drawVolumetricCumulus(
     }
 }
 
-/**
- * [테마 1] 하늘 배경 (기존 로직 유지 + 입체 뭉게구름 적용)
- */
 @Composable
 fun WeatherSkyBackground(
     weather: WeatherType,
@@ -1107,9 +1048,6 @@ fun WeatherSkyBackground(
     }
 }
 
-/**
- * [테마 2] 아이오닉 스타일 하늘 + 3D 입체 뭉게구름
- */
 @Composable
 fun Theme2SkyBackground(
     weather: WeatherType,
@@ -1143,9 +1081,6 @@ fun Theme2SkyBackground(
     }
 }
 
-/**
- * [테마 2] 네온 블루 미래형 고속도로
- */
 @Composable
 fun NeonHighwayRoadCanvas(
     roadOffset: Float,
@@ -1162,7 +1097,6 @@ fun NeonHighwayRoadCanvas(
         val roadBottom = if (isDay) Color(0xFFECF3FA) else Color(0xFF071529)
         drawRect(brush = Brush.verticalGradient(listOf(roadTop, roadBottom)))
 
-        // 중앙 노면 네온 블루 반사광
         val glowColor = if (isDay) Color(0xFF0088FF).copy(alpha = 0.22f) else Color(0xFF00B4FF).copy(alpha = 0.38f)
         drawRect(
             brush = Brush.horizontalGradient(
@@ -1172,14 +1106,12 @@ fun NeonHighwayRoadCanvas(
             )
         )
 
-        // 좌/우 네온 가드레일
         val railColor = if (isDay) Color(0xFF0077CC) else Color(0xFF00C8FF)
         drawLine(railColor, Offset(centerX - 18f, horizonY), Offset(0f, h * 0.34f), strokeWidth = 4.dp.toPx())
         drawLine(railColor.copy(alpha = 0.7f), Offset(centerX - 18f, horizonY + 8f), Offset(0f, h * 0.50f), strokeWidth = 2.5.dp.toPx())
         drawLine(railColor, Offset(centerX + 18f, horizonY), Offset(w, h * 0.34f), strokeWidth = 4.dp.toPx())
         drawLine(railColor.copy(alpha = 0.7f), Offset(centerX + 18f, horizonY + 8f), Offset(w, h * 0.50f), strokeWidth = 2.5.dp.toPx())
 
-        // 가드레일 LED 라이트 애니메이션
         val lightCount = 9
         for (i in 0 until lightCount) {
             val tRaw = (i.toFloat() / lightCount + roadOffset) % 1f
@@ -1205,7 +1137,6 @@ fun NeonHighwayRoadCanvas(
             )
         }
 
-        // 주행 차선 점선 애니메이션
         val laneColor = if (isDay) Color(0xFF0084E8) else Color(0xFF38D4FF)
         val dashCount = 7
         for (i in 0 until dashCount) {
@@ -1229,9 +1160,6 @@ fun NeonHighwayRoadCanvas(
     }
 }
 
-/**
- * [테마 2] 240km/h 그라데이션 속도계
- */
 @Composable
 fun GradientSpeedometer240(
     speed: Float,
@@ -1415,9 +1343,6 @@ fun GradientSpeedometer240(
     }
 }
 
-/**
- * [테마 2] 우측 원형 트립 계기판 (터치하여 초기화)
- */
 @Composable
 fun CircularTripGauge(
     distanceKm: Float,
@@ -1560,18 +1485,22 @@ fun WeatherPrecipitationOverlay(
 fun SpeedGaugeNeedleOverlay(
     speed: Float,
     maxSpeed: Float,
+    centerXRatio: Float = 0.198f,
+    centerYRatio: Float = 0.54f,
+    startAngleDeg: Float = -135f,
+    sweepAngleDeg: Float = 270f,
     modifier: Modifier = Modifier
 ) {
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
 
-        val cx = w * 0.198f
-        val cy = h * 0.54f
+        val cx = w * centerXRatio
+        val cy = h * centerYRatio
         val radius = minOf(w * 0.175f, h * 0.34f)
 
         val progress = (speed / maxSpeed).coerceIn(0f, 1f)
-        val angleDeg = -135f + (270f * progress)
+        val angleDeg = startAngleDeg + (sweepAngleDeg * progress)
 
         rotate(degrees = angleDeg, pivot = Offset(cx, cy)) {
             val glowStartY = cy - radius * 0.72f

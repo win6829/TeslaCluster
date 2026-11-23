@@ -136,7 +136,7 @@ fun TeslaClusterScreen() {
 
     // 테마 상태 (차량 터치 시 ORIGINAL <-> NEON_IONIQ 전환)
     var currentTheme by remember { mutableStateOf(ClusterTheme.ORIGINAL) }
-    val currentMaxSpeed = if (currentTheme == ClusterTheme.ORIGINAL) 200f else 240f
+    val currentMaxSpeed = 240f
 
     var gpsSpeedKmh by remember { mutableFloatStateOf(0f) }
     var isTestDriving by remember { mutableStateOf(false) }
@@ -211,7 +211,7 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 2. 60fps 루프: 테스트 주행(테마1: 0~200 / 테마2: 0~240) + 부드러운 속도 보간 + 도로/날씨 모션
+    // 2. 60fps 루프: 테스트 주행(0~240) + 부드러운 속도 보간 + 도로/날씨 모션
     val latestMaxSpeed by rememberUpdatedState(currentMaxSpeed)
     LaunchedEffect(Unit) {
         var lastFrameNs = System.nanoTime()
@@ -269,7 +269,6 @@ fun TeslaClusterScreen() {
             if (smoothSpeedKmh > 0.5f) {
                 val flowRate = (smoothSpeedKmh / 36f) * dtSec
                 roadScrollPhase = (roadScrollPhase + flowRate) % 1f
-                // 테스트 주행 시에도 트립 주행거리 확인 가능하도록 누적
                 if (isTestDriving) {
                     totalDistanceMeters += (smoothSpeedKmh / 3.6f) * dtSec
                 }
@@ -458,7 +457,7 @@ fun TeslaClusterScreen() {
 
         if (currentTheme == ClusterTheme.ORIGINAL) {
             // =========================================================
-            // [테마 1] 기존 클래식 테슬라 클러스터 (100% 유지 + 3D 뭉게구름)
+            // [테마 1] 기존 클래식 테슬라 클러스터 (240km/h 기준 바늘 정렬 + 3D 뭉게구름)
             // =========================================================
             val bgWidthRatio = 0.88f
             val roadCenterInBg = 0.66f
@@ -489,10 +488,10 @@ fun TeslaClusterScreen() {
                 )
             }
 
-            // 2) 속도계 바늘 (최고 속도 200 km/h)
+            // 2) 속도계 바늘 (최고 속도 240 km/h 기준)
             SpeedGaugeNeedleOverlay(
                 speed = smoothSpeedKmh,
-                maxSpeed = 200f,
+                maxSpeed = 240f,
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .fillMaxHeight()
@@ -510,7 +509,7 @@ fun TeslaClusterScreen() {
                     .fillMaxWidth(bgWidthRatio)
             )
 
-            // 4) 중앙 테슬라 차량 (터치 시 테마 2로 전환!)
+            // 4) 중앙 테슬라 차량 (터치 시 테마 2로 전환)
             val carWidth = screenW * 0.175f
             val carHeight = carWidth * 0.68f
             Box(
@@ -614,7 +613,7 @@ fun TeslaClusterScreen() {
                         .align(Alignment.BottomCenter)
                 )
 
-                // 3) 중앙 테슬라 차량 (터치 시 테마 1로 전환!)
+                // 3) 중앙 테슬라 차량 (터치 시 테마 1로 전환)
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)

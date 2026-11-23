@@ -1,4 +1,4 @@
-package com.example.teslacluster
+package com.tesla.cluster
 
 import android.Manifest
 import android.annotation.SuppressLint
@@ -417,4 +417,394 @@ fun HighwayRoadCanvas(
 
         drawLine(railColor, Offset(centerX - 18f, horizonY), Offset(0f, h * 0.34f), strokeWidth = 4.dp.toPx())
         drawLine(railColor.copy(alpha = 0.7f), Offset(centerX - 18f, horizonY + 8f), Offset(0f, h * 0.50f), strokeWidth = 2.5.dp.toPx())
-        drawLine
+        drawLine(railColor, Offset(centerX + 18f, horizonY), Offset(w, h * 0.34f), strokeWidth = 4.dp.toPx())
+        drawLine(railColor.copy(alpha = 0.7f), Offset(centerX + 18f, horizonY + 8f), Offset(w, h * 0.50f), strokeWidth = 2.5.dp.toPx())
+
+        if (isNeon) {
+            val lightCount = 9
+            for (i in 0 until lightCount) {
+                val tRaw = (i.toFloat() / lightCount + roadOffset) % 1f
+                val t = tRaw * tRaw
+                val y = horizonY + t * h * 0.44f
+                val leftX = (centerX - 18f) * (1f - t)
+                val rightX = (centerX + 18f) + (w - (centerX + 18f)) * t
+                val lampW = (3f + 16f * t).dp.toPx()
+                val lampH = (1.5f + 4.5f * t).dp.toPx()
+
+                val lampColor = if (isNightMode) Color(0xFFD6F7FF) else Color(0xFF0095FF)
+                drawRoundRect(
+                    color = lampColor,
+                    topLeft = Offset(leftX - lampW / 2f, y),
+                    size = Size(lampW, lampH),
+                    cornerRadius = CornerRadius(4f, 4f)
+                )
+                drawRoundRect(
+                    color = lampColor,
+                    topLeft = Offset(rightX - lampW / 2f, y),
+                    size = Size(lampW, lampH),
+                    cornerRadius = CornerRadius(4f, 4f)
+                )
+            }
+        }
+
+        val laneColor = when {
+            isNeon && isNightMode -> Color(0xFF38D4FF)
+            isNeon && !isNightMode -> Color(0xFF0084E8)
+            isNightMode -> Color(0xFFB0BEC5)
+            else -> Color(0xFF607D8B)
+        }
+
+        val dashCount = 7
+        for (i in 0 until dashCount) {
+            val tStartRaw = (i.toFloat() / dashCount + roadOffset) % 1f
+            val tEndRaw = (tStartRaw + 0.07f).coerceAtMost(1f)
+            val t1 = tStartRaw * tStartRaw
+            val t2 = tEndRaw * tEndRaw
+
+            val y1 = horizonY + t1 * h
+            val y2 = horizonY + t2 * h
+
+            val leftX1 = centerX - (12f + t1 * w * 0.24f)
+            val leftX2 = centerX - (12f + t2 * w * 0.24f)
+            val rightX1 = centerX + (12f + t1 * w * 0.24f)
+            val rightX2 = centerX + (12f + t2 * w * 0.24f)
+
+            val strokeW = (2f + t1 * 7f).dp.toPx()
+            drawLine(
+                color = laneColor,
+                start = Offset(leftX1, y1),
+                end = Offset(leftX2, y2),
+                strokeWidth = strokeW,
+                cap = StrokeCap.Round
+            )
+            drawLine(
+                color = laneColor,
+                start = Offset(rightX1, y1),
+                end = Offset(rightX2, y2),
+                strokeWidth = strokeW,
+                cap = StrokeCap.Round
+            )
+        }
+    }
+}
+
+@Composable
+fun GradientSpeedometer(
+    modifier: Modifier,
+    speed: Float,
+    maxSpeed: Float = 240f,
+    isNightMode: Boolean,
+    theme: ClusterTheme,
+    onToggleDayNight: () -> Unit
+) {
+    val isNeon = theme == ClusterTheme.NEON_HIGHWAY
+    val progress = (speed / maxSpeed).coerceIn(0f, 1f)
+    val startAngle = 135f
+    val maxSweep = 270f
+    val currentSweep = progress * maxSweep
+
+    val mainTextColor = if (isNightMode) Color.White else Color(0xFF161A20)
+    val subTextColor = if (isNightMode) Color(0xFFAAB4C2) else Color(0xFF5D6673)
+
+    val glowPrimary = when {
+        isNeon && isNightMode -> Color(0xFF00D4FF)
+        isNeon && !isNightMode -> Color(0xFF007BFF)
+        isNightMode -> Color(0xFFC8E0F8)
+        else -> Color(0xFF3A82F6)
+    }
+    val ringColor = when {
+        isNeon -> if (isNightMode) Color(0xFF2EE6FF) else Color(0xFF0077E6)
+        isNightMode -> Color(0xFFE6EFFA)
+        else -> Color(0xFF2563EB)
+    }
+    val trackColor = if (isNightMode) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.10f)
+    val centerFadeColor = when {
+        isNeon && isNightMode -> Color(0xFF030710)
+        isNightMode -> Color(0xFF121720)
+        else -> Color(0xFFF6F8FB)
+    }
+
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val radius = size.minDimension / 2f - 14.dp.toPx()
+            val center = Offset(size.width / 2f, size.height / 2f)
+            val arcTopLeft = Offset(center.x - radius, center.y - radius)
+            val arcSize = Size(radius * 2f, radius * 2f)
+
+            drawArc(
+                color = trackColor,
+                startAngle = startAngle,
+                sweepAngle = maxSweep,
+                useCenter = false,
+                topLeft = arcTopLeft,
+                size = arcSize,
+                style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round)
+            )
+
+            if (currentSweep > 0.5f) {
+                val sweepFrac = (currentSweep / 360f).coerceIn(0.01f, 0.76f)
+                rotate(degrees = startAngle, pivot = center) {
+                    val sweepBrush = Brush.sweepGradient(
+                        0.0f to glowPrimary.copy(alpha = 0.06f),
+                        (sweepFrac * 0.55f) to glowPrimary.copy(alpha = 0.34f),
+                        sweepFrac to glowPrimary.copy(alpha = 0.78f),
+                        (sweepFrac + 0.005f).coerceAtMost(1f) to Color.Transparent,
+                        center = center
+                    )
+                    drawArc(
+                        brush = sweepBrush,
+                        startAngle = 0f,
+                        sweepAngle = currentSweep,
+                        useCenter = true,
+                        topLeft = arcTopLeft,
+                        size = arcSize
+                    )
+
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            0.0f to centerFadeColor.copy(alpha = 0.92f),
+                            0.46f to centerFadeColor.copy(alpha = 0.78f),
+                            0.84f to Color.Transparent,
+                            center = center,
+                            radius = radius
+                        ),
+                        radius = radius,
+                        center = center
+                    )
+
+                    drawArc(
+                        brush = Brush.sweepGradient(
+                            0.0f to ringColor.copy(alpha = 0.25f),
+                            sweepFrac to ringColor,
+                            (sweepFrac + 0.005f).coerceAtMost(1f) to Color.Transparent,
+                            center = center
+                        ),
+                        startAngle = 0f,
+                        sweepAngle = currentSweep,
+                        useCenter = false,
+                        topLeft = arcTopLeft,
+                        size = arcSize,
+                        style = Stroke(width = 5.5.dp.toPx(), cap = StrokeCap.Round)
+                    )
+
+                    val endRad = Math.toRadians(currentSweep.toDouble())
+                    val innerR = radius * 0.62f
+                    val pStart = Offset(
+                        center.x + (cos(endRad) * innerR).toFloat(),
+                        center.y + (sin(endRad) * innerR).toFloat()
+                    )
+                    val pEnd = Offset(
+                        center.x + (cos(endRad) * radius).toFloat(),
+                        center.y + (sin(endRad) * radius).toFloat()
+                    )
+                    drawLine(
+                        color = Color.White,
+                        start = pStart,
+                        end = pEnd,
+                        strokeWidth = 3.dp.toPx(),
+                        cap = StrokeCap.Round
+                    )
+                }
+            }
+
+            val tickPaint = Paint().apply {
+                color = if (isNeon) {
+                    if (isNightMode) android.graphics.Color.parseColor("#B8F3FF")
+                    else android.graphics.Color.parseColor("#0055AA")
+                } else {
+                    if (isNightMode) android.graphics.Color.parseColor("#8899AA")
+                    else android.graphics.Color.parseColor("#667788")
+                }
+                textSize = 11.sp.toPx()
+                textAlign = Paint.Align.CENTER
+                isAntiAlias = true
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            }
+
+            for (v in 0..240 step 10) {
+                val isMajor = v % 20 == 0
+                val angleDeg = startAngle + (v / maxSpeed) * maxSweep
+                val rad = Math.toRadians(angleDeg.toDouble())
+
+                val outerR = radius - 3.dp.toPx()
+                val innerR = outerR - if (isMajor) 10.dp.toPx() else 5.dp.toPx()
+
+                val tickCol = if (v <= speed) ringColor else trackColor.copy(alpha = 0.55f)
+                drawLine(
+                    color = tickCol,
+                    start = Offset(center.x + (cos(rad) * innerR).toFloat(), center.y + (sin(rad) * innerR).toFloat()),
+                    end = Offset(center.x + (cos(rad) * outerR).toFloat(), center.y + (sin(rad) * outerR).toFloat()),
+                    strokeWidth = if (isMajor) 2.dp.toPx() else 1.2.dp.toPx()
+                )
+
+                if (isMajor && isNeon) {
+                    val labelR = radius - 22.dp.toPx()
+                    val lx = center.x + (cos(rad) * labelR).toFloat()
+                    val ly = center.y + (sin(rad) * labelR).toFloat() + 4.dp.toPx()
+                    drawContext.canvas.nativeCanvas.drawText(v.toString(), lx, ly, tickPaint)
+                }
+            }
+        }
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = "D",
+                color = mainTextColor,
+                fontSize = 32.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.SansSerif
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = if (isNightMode) "Night Mode" else "Day Mode",
+                color = subTextColor,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                fontFamily = FontFamily.SansSerif,
+                modifier = Modifier
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null
+                    ) { onToggleDayNight() }
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = speed.toInt().toString(),
+                color = mainTextColor,
+                fontSize = 72.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.SansSerif,
+                letterSpacing = (-2).sp
+            )
+            Text(
+                text = "km/h",
+                color = subTextColor,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Medium,
+                fontFamily = FontFamily.SansSerif
+            )
+        }
+    }
+}
+
+@Composable
+fun TripGaugePanel(
+    modifier: Modifier,
+    distanceKm: Double,
+    elapsedSeconds: Long,
+    isNightMode: Boolean,
+    theme: ClusterTheme,
+    onResetTrip: () -> Unit
+) {
+    val isNeon = theme == ClusterTheme.NEON_HIGHWAY
+    val mainTextColor = if (isNightMode) Color.White else Color(0xFF161A20)
+    val subTextColor = if (isNightMode) Color(0xFFAAB4C2) else Color(0xFF5D6673)
+    val accentColor = when {
+        isNeon && isNightMode -> Color(0xFF00D4FF)
+        isNeon && !isNightMode -> Color(0xFF0077E6)
+        isNightMode -> Color(0xFFC8E0F8)
+        else -> Color(0xFF2563EB)
+    }
+    val trackColor = if (isNightMode) Color.White.copy(alpha = 0.14f) else Color.Black.copy(alpha = 0.10f)
+
+    val hours = elapsedSeconds / 3600
+    val minutes = (elapsedSeconds % 3600) / 60
+    val seconds = elapsedSeconds % 60
+    val timeStr = String.format("%02d:%02d:%02d", hours, minutes, seconds)
+
+    val avgSpeed = if (elapsedSeconds > 0) {
+        (distanceKm / (elapsedSeconds / 3600.0)).coerceIn(0.0, 240.0)
+    } else 0.0
+
+    val tripProgress = ((distanceKm % 100.0) / 100.0).toFloat()
+
+    Box(
+        modifier = modifier.pointerInput(Unit) {
+            detectTapGestures(onLongPress = { onResetTrip() })
+        },
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val radius = size.minDimension / 2f - 14.dp.toPx()
+            val center = Offset(size.width / 2f, size.height / 2f)
+            val arcTopLeft = Offset(center.x - radius, center.y - radius)
+            val arcSize = Size(radius * 2f, radius * 2f)
+
+            drawArc(
+                color = trackColor,
+                startAngle = 135f,
+                sweepAngle = 270f,
+                useCenter = false,
+                topLeft = arcTopLeft,
+                size = arcSize,
+                style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round)
+            )
+
+            drawArc(
+                color = accentColor,
+                startAngle = 135f,
+                sweepAngle = 270f * tripProgress,
+                useCenter = false,
+                topLeft = arcTopLeft,
+                size = arcSize,
+                style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round)
+            )
+        }
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = "TRIP",
+                color = accentColor,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 2.sp
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = String.format("%.1f", distanceKm),
+                color = mainTextColor,
+                fontSize = 48.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.SansSerif
+            )
+            Text(
+                text = "km",
+                color = subTextColor,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "$timeStr  |  ${avgSpeed.toInt()} km/h",
+                color = subTextColor,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "길게 눌러 리셋",
+                color = subTextColor.copy(alpha = 0.6f),
+                fontSize = 10.sp
+            )
+        }
+    }
+}
+
+@Composable
+fun TeslaVehicleView(modifier: Modifier) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Image(
+            painter = painterResource(id = R.drawable.car_model3),
+            contentDescription = "Tesla Model 3",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize()
+        )
+    }
+}

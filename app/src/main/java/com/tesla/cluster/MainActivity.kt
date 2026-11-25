@@ -50,6 +50,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -134,7 +135,6 @@ fun TeslaClusterScreen() {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("tesla_cluster_prefs", Context.MODE_PRIVATE) }
 
-    // 마지막으로 사용한 테마 불러오기
     var currentTheme by remember {
         val savedName = prefs.getString("last_theme", ClusterTheme.ORIGINAL.name)
         val restoredTheme = try {
@@ -403,7 +403,6 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // 테마 순환 전환 (ORIGINAL -> NEON_IONIQ -> CHRISTMAS -> ORIGINAL)
     val toggleTheme = {
         val nextTheme = when (currentTheme) {
             ClusterTheme.ORIGINAL -> ClusterTheme.NEON_IONIQ
@@ -436,9 +435,6 @@ fun TeslaClusterScreen() {
         val screenH = maxHeight
 
         if (currentTheme == ClusterTheme.ORIGINAL) {
-            // =========================================================
-            // [테마 1] 기존 클래식 테슬라 클러스터 (240km/h 정렬 + 3D 뭉게구름)
-            // =========================================================
             val bgWidthRatio = 0.88f
             val roadCenterInBg = 0.66f
             val carCenterXRatio = bgWidthRatio * roadCenterInBg
@@ -554,9 +550,6 @@ fun TeslaClusterScreen() {
                 }
             }
         } else if (currentTheme == ClusterTheme.NEON_IONIQ) {
-            // =========================================================
-            // [테마 2] 아이오닉 스타일 (네온 블루 + 그라데이션)
-            // =========================================================
             val bgTopColor by animateColorAsState(
                 targetValue = if (activeIsDay) Color(0xFFEAF2FA) else Color(0xFF020408),
                 animationSpec = tween(450), label = "t2_top"
@@ -644,7 +637,7 @@ fun TeslaClusterScreen() {
             }
         } else {
             // =========================================================
-            // [테마 3] 크리스마스 밤 테마 (bg_xmas_road + sleigh_santa 이미지 적용)
+            // [테마 3] 크리스마스 밤 테마 + 도로/썰매 모션 연동
             // =========================================================
             val xmasSpeedCenterX = 0.21f
             val xmasSpeedCenterY = 0.49f
@@ -653,8 +646,13 @@ fun TeslaClusterScreen() {
             val sleighCenterX = 0.56f
             val sleighCenterY = 0.74f
 
+            val motionAmp = (smoothSpeedKmh / 100f).coerceIn(0f, 1.4f)
+            val sleighBobY = sin(elapsedSec * (3.2f + motionAmp * 5.0f)) * (2.5f + motionAmp * 5.5f)
+            val sleighSwayX = cos(elapsedSec * (2.1f + motionAmp * 3.5f)) * (2.0f + motionAmp * 4.5f)
+            val sleighTiltDeg = sin(elapsedSec * (2.8f + motionAmp * 4.0f)) * (1.2f + motionAmp * 2.5f)
+
             Box(modifier = Modifier.fillMaxSize()) {
-                // 1) 크리스마스 배경 이미지 (bg_xmas_road.png)
+                // 1) 크리스마스 배경 이미지
                 Image(
                     painter = painterResource(id = R.drawable.bg_xmas_road),
                     contentDescription = "Christmas Drive Background",
@@ -662,7 +660,15 @@ fun TeslaClusterScreen() {
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // 2) 좌측 캔디 케인 속도계 회전 바늘 (0 ~ 240 km/h)
+                // 2) 속도에 맞춰 앞으로 흐르는 눈길/차선 모션 라인
+                ChristmasMotionRoadOverlay(
+                    speed = smoothSpeedKmh,
+                    scrollPhase = roadScrollPhase,
+                    elapsedSec = elapsedSec,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                // 3) 좌측 캔디 케인 속도계 회전 바늘 (0 ~ 240 km/h)
                 SpeedGaugeNeedleOverlay(
                     speed = smoothSpeedKmh,
                     maxSpeed = 240f,
@@ -673,7 +679,7 @@ fun TeslaClusterScreen() {
                     modifier = Modifier.fillMaxSize()
                 )
 
-                // 3) 좌측 속도계 중앙 디지털 숫자 (터치 시 테스트 주행)
+                // 4) 좌측 속도계 중앙 디지털 숫자 (터치 시 테스트 주행)
                 val xmasSpeedBox = 140.dp
                 Box(
                     modifier = Modifier
@@ -705,7 +711,7 @@ fun TeslaClusterScreen() {
                     }
                 }
 
-                // 4) 우측 크리스마스 리스 중앙 Trip A (터치 시 초기화)
+                // 5) 우측 크리스마스 리스 중앙 Trip A (터치 시 초기화)
                 val xmasTripBox = 130.dp
                 Box(
                     modifier = Modifier
@@ -750,16 +756,19 @@ fun TeslaClusterScreen() {
                     }
                 }
 
-                // 5) 중앙 눈길 위 산타 썰매 이미지 (sleigh_santa.png, 터치 시 테마 전환)
+                // 6) 중앙 눈길 위 산타 썰매 모션 (터치 시 테마 전환)
                 val sleighW = screenW * 0.24f
                 val sleighH = sleighW * 0.68f
                 Box(
                     modifier = Modifier
                         .offset(
-                            x = screenW * sleighCenterX - sleighW / 2,
-                            y = screenH * sleighCenterY - sleighH / 2
+                            x = screenW * sleighCenterX - sleighW / 2 + sleighSwayX.dp,
+                            y = screenH * sleighCenterY - sleighH / 2 + sleighBobY.dp
                         )
                         .size(width = sleighW, height = sleighH)
+                        .graphicsLayer {
+                            rotationZ = sleighTiltDeg
+                        }
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
@@ -776,7 +785,6 @@ fun TeslaClusterScreen() {
             }
         }
 
-        // 비/눈 전경 파티클 효과 (테마 3은 눈 효과 기본 적용)
         val effectWeather = if (currentTheme == ClusterTheme.CHRISTMAS) WeatherType.SNOW else activeWeather
         if (effectWeather == WeatherType.RAIN || effectWeather == WeatherType.SNOW) {
             WeatherPrecipitationOverlay(
@@ -788,9 +796,6 @@ fun TeslaClusterScreen() {
             )
         }
 
-        // =========================================================
-        // 공통 상단 바 / (테마1 전용 우측 Trip A 카드) / 하단 주소 바
-        // =========================================================
         val topPrimaryText = if (isIoniqDayLight) Color(0xFF161A20) else Color.White
         val topAccentText = if (isIoniqDayLight) Color(0xFF0284C7) else Color(0xFF22D3EE)
         val topChipBg = if (isIoniqDayLight) Color(0xD9FFFFFF) else Color(0x990F172A)
@@ -974,6 +979,84 @@ fun TeslaClusterScreen() {
                     fontWeight = FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+/**
+ * [테마 3] 눈길 원근감에 맞춘 전진 흐름선 및 난간 반짝임 모션
+ */
+@Composable
+fun ChristmasMotionRoadOverlay(
+    speed: Float,
+    scrollPhase: Float,
+    elapsedSec: Float,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+
+        // 난간 조명 은은한 반짝임 (정차 중에도 살아있는 모션)
+        val sparkleCount = 12
+        for (i in 0 until sparkleCount) {
+            val t = i.toFloat() / sparkleCount
+            val lx = w * (0.50f - t * 0.25f)
+            val ly = h * (0.54f + t * 0.28f)
+            val rx = w * (0.53f + t * 0.28f)
+            val ry = h * (0.54f + t * 0.28f)
+            val pulse = 0.35f + 0.65f * ((sin(elapsedSec * 4.5f + i * 1.1f) + 1f) * 0.5f)
+            val r = (1.5f + t * 3.5f).dp.toPx()
+
+            drawCircle(
+                color = Color(0xFFFDE047).copy(alpha = pulse * 0.75f),
+                center = Offset(lx, ly),
+                radius = r
+            )
+            drawCircle(
+                color = Color(0xFFFDE047).copy(alpha = pulse * 0.75f),
+                center = Offset(rx, ry),
+                radius = r
+            )
+        }
+
+        if (speed <= 0.5f) return@Canvas
+
+        val intensity = (speed / 120f).coerceIn(0.15f, 1.4f)
+        val centerX = w * 0.52f
+        val topY = h * 0.55f
+        val botY = h * 0.96f
+        val topHalfW = w * 0.025f
+        val botHalfW = w * 0.32f
+
+        val laneRatios = listOf(-0.55f, 0.55f)
+        val dashCount = 8
+
+        for (i in 0 until dashCount) {
+            val rawT = ((i.toFloat() / dashCount) + scrollPhase) % 1f
+            val p1 = rawT * rawT
+            val dashLen = (0.045f + 0.04f * intensity) * (0.35f + rawT)
+            val p2 = (rawT + dashLen).coerceAtMost(1f).let { it * it }
+
+            val y1 = topY + (botY - topY) * p1
+            val y2 = topY + (botY - topY) * p2
+            if (y2 <= y1) continue
+
+            val halfW1 = topHalfW + (botHalfW - topHalfW) * p1
+            val halfW2 = topHalfW + (botHalfW - topHalfW) * p2
+
+            val strokeW = ((1.4f + 3.2f * p1) * intensity).dp.toPx()
+            val alpha = ((0.25f + 0.60f * p1) * intensity).coerceIn(0f, 0.9f)
+
+            for (ratio in laneRatios) {
+                drawLine(
+                    color = Color(0xFFE0F2FE).copy(alpha = alpha),
+                    start = Offset(centerX + halfW1 * ratio, y1),
+                    end = Offset(centerX + halfW2 * ratio, y2),
+                    strokeWidth = strokeW,
+                    cap = StrokeCap.Round
                 )
             }
         }
@@ -1720,7 +1803,7 @@ fun WeatherPrecipitationOverlay(
             val snowColor = if (isDay) Color(0xFFCBD5E1) else Color.White
             for (i in 0 until flakeCount) {
                 val seed = i * 61.17f
-                val fallSpeed = 0.14f + (i % 4) * 0.04f
+                val fallSpeed = 0.14f + (i % 4) * 0.04f + speedFactor * 0.22f
                 val progress = ((elapsedSec * fallSpeed) + (seed % 1f)) % 1f
                 val sway = sin(elapsedSec * 2f + i) * 18f
                 val x = ((seed * 19.3f) % w) + sway

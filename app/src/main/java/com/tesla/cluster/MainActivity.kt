@@ -1368,7 +1368,7 @@ fun ChristmasSkyBackground(
         val silhouetteY = moonCenter.y - moonR * 0.2f
         val silPath = Path().apply {
             moveTo(silhouetteX - 22f, silhouetteY - 2f) // 썰매
-            quadraticTo(silhouetteX - 16f, silhouetteY - 6f, silhouetteX - 10f, silhouetteY - 1f)
+            quadraticBezierTo(silhouetteX - 16f, silhouetteY - 6f, silhouetteX - 10f, silhouetteY - 1f)
             lineTo(silhouetteX - 4f, silhouetteY - 1f)
             moveTo(silhouetteX - 22f, silhouetteY + 1f) // 썰매 발
             lineTo(silhouetteX - 10f, silhouetteY + 1f)

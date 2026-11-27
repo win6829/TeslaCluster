@@ -454,7 +454,6 @@ fun TeslaClusterScreen() {
             val carCenterYRatio = 0.66f
             val speedCenterXRatio = 0.175f
             val speedCenterYRatio = 0.54f
-            // 테마 1 좌측 속도계 원 지름과 동일한 크기로 Trip A 원형 크기 산출
             val theme1GaugeSize = minOf(screenW * bgWidthRatio * 0.35f, screenH * 0.68f)
 
             WeatherSkyBackground(
@@ -565,7 +564,6 @@ fun TeslaClusterScreen() {
                 }
             }
 
-            // 테마 1 우측 Trip A (속도계 원과 동일한 크기 + 운행시간 포함)
             CircularTripGauge(
                 distanceKm = totalDistanceMeters / 1000f,
                 driveTimeSec = tripDurationSec,
@@ -652,7 +650,6 @@ fun TeslaClusterScreen() {
                         .size(275.dp)
                 )
 
-                // 테마 2 우측 Trip A (좌측 속도계와 동일한 275.dp)
                 CircularTripGauge(
                     distanceKm = totalDistanceMeters / 1000f,
                     driveTimeSec = tripDurationSec,
@@ -665,9 +662,6 @@ fun TeslaClusterScreen() {
                 )
             }
         } else {
-            // =========================================================
-            // [테마 3] 크리스마스 리스(Wreath) 테마 + 산타 썰매 + 2배 트리 + 초록 숫자
-            // =========================================================
             val xmasTopColor by animateColorAsState(
                 targetValue = if (activeIsDay) Color(0xFFFFF1F2) else Color(0xFF1A0306),
                 animationSpec = tween(450), label = "xmas_top"
@@ -701,7 +695,6 @@ fun TeslaClusterScreen() {
                         .align(Alignment.BottomCenter)
                 )
 
-                // 중앙 차량을 산타 썰매(sleigh_santa.png)로 표시
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -732,7 +725,6 @@ fun TeslaClusterScreen() {
                     )
                 }
 
-                // 좌측 크리스마스 리스 속도계 (275.dp, 초록 숫자)
                 ChristmasRedSpeedometer240(
                     speed = smoothSpeedKmh,
                     displayedSpeedInt = displayedSpeedInt,
@@ -747,7 +739,6 @@ fun TeslaClusterScreen() {
                         .size(275.dp)
                 )
 
-                // 우측 크리스마스 리스 Trip A (275.dp, 초록 숫자 + 운행시간)
                 ChristmasTripGauge(
                     distanceKm = totalDistanceMeters / 1000f,
                     driveTimeSec = tripDurationSec,
@@ -933,16 +924,11 @@ fun TeslaClusterScreen() {
     }
 }
 
-/**
- * 문 앞에 거는 둥근 크리스마스 리스(Wreath) 외곽 장식 드로잉
- * - 겹겹이 쌓인 초록 솔잎 링 + 빨간 호랑가시 열매 + 반짝이는 골드/레드 오너먼트 + 하단 빨간 리본
- */
 private fun DrawScope.drawChristmasWreathFrame(
     center: Offset,
     wreathRadius: Float,
     twinkle: Float
 ) {
-    // 1. 베이스 솔잎 링 (짙은 소나무 그린)
     drawCircle(
         color = Color(0xFF14532D),
         radius = wreathRadius,
@@ -950,7 +936,6 @@ private fun DrawScope.drawChristmasWreathFrame(
         style = Stroke(width = 14.dp.toPx())
     )
 
-    // 2. 풍성한 솔잎 뭉치들 (360도 빙 둘러서 배치)
     val leafClusters = 36
     for (i in 0 until leafClusters) {
         val deg = i * (360f / leafClusters)
@@ -971,7 +956,6 @@ private fun DrawScope.drawChristmasWreathFrame(
         )
     }
 
-    // 3. 리스 위 오너먼트 볼 & 빨간 열매 (12개 포인트)
     val ornamentCount = 12
     for (i in 0 until ornamentCount) {
         val deg = i * (360f / ornamentCount) + 15f
@@ -980,7 +964,6 @@ private fun DrawScope.drawChristmasWreathFrame(
         val oy = center.y + (sin(rad) * wreathRadius).toFloat()
 
         if (i % 2 == 0) {
-            // 반짝이는 골드 방울
             drawCircle(
                 color = Color(0xFFFACC15).copy(alpha = twinkle),
                 radius = 4.2.dp.toPx(),
@@ -992,7 +975,6 @@ private fun DrawScope.drawChristmasWreathFrame(
                 center = Offset(ox - 1.2.dp.toPx(), oy - 1.2.dp.toPx())
             )
         } else {
-            // 빨간 호랑가시 열매 2알
             drawCircle(
                 color = Color(0xFFEF4444),
                 radius = 3.2.dp.toPx(),
@@ -1006,7 +988,6 @@ private fun DrawScope.drawChristmasWreathFrame(
         }
     }
 
-    // 4. 리스 하단(90도 방향) 빨간 리본 장식
     val bowCenter = Offset(center.x, center.y + wreathRadius + 2.dp.toPx())
     val leftWing = Path().apply {
         moveTo(bowCenter.x, bowCenter.y)
@@ -1026,9 +1007,6 @@ private fun DrawScope.drawChristmasWreathFrame(
     drawCircle(color = Color(0xFFFACC15), radius = 1.8.dp.toPx(), center = bowCenter)
 }
 
-/**
- * [테마 3] 크리스마스 리스 속도계 게이지 (275.dp, 숫자 초록색)
- */
 @Composable
 fun ChristmasRedSpeedometer240(
     speed: Float,
@@ -1045,7 +1023,6 @@ fun ChristmasRedSpeedometer240(
     val maxSweep = 270f
     val currentSweep = progress * maxSweep
 
-    // 크리스마스 테마 속도계 숫자는 모두 초록색
     val greenNumberColor = if (isDay) Color(0xFF15803D) else Color(0xFF22C55E)
     val subTextColor = if (isDay) Color(0xFF9F1239) else Color(0xFFFDA4AF)
     val glowPrimary = if (isDay) Color(0xFFE11D48) else Color(0xFFFF1E42)
@@ -1069,10 +1046,8 @@ fun ChristmasRedSpeedometer240(
             val arcTopLeft = Offset(center.x - radius, center.y - radius)
             val arcSize = Size(radius * 2f, radius * 2f)
 
-            // 외곽 크리스마스 리스 장식
             drawChristmasWreathFrame(center = center, wreathRadius = wreathRadius, twinkle = twinkle)
 
-            // 내부 속도계 트랙
             drawArc(
                 color = trackColor,
                 startAngle = startAngle,
@@ -1150,7 +1125,6 @@ fun ChristmasRedSpeedometer240(
                 }
             }
 
-            // 눈금 숫자도 초록색으로 통일
             val tickPaint = Paint().apply {
                 color = if (isDay) android.graphics.Color.parseColor("#15803D") else android.graphics.Color.parseColor("#4ADE80")
                 textSize = 9.5.sp.toPx()
@@ -1223,9 +1197,6 @@ fun ChristmasRedSpeedometer240(
     }
 }
 
-/**
- * [테마 3] 크리스마스 리스 Trip A 게이지 (275.dp, 숫자 초록색 + 운행시간 표기)
- */
 @Composable
 fun ChristmasTripGauge(
     distanceKm: Float,
@@ -1257,7 +1228,6 @@ fun ChristmasTripGauge(
             val arcTopLeft = Offset(center.x - radius, center.y - radius)
             val arcSize = Size(radius * 2f, radius * 2f)
 
-            // 외곽 크리스마스 리스 장식
             drawChristmasWreathFrame(center = center, wreathRadius = wreathRadius, twinkle = twinkle)
 
             drawArc(
@@ -1324,9 +1294,6 @@ fun ChristmasTripGauge(
     }
 }
 
-/**
- * [테마 3] 도로 양옆 크리스마스 트리 2배 확대 캔버스
- */
 @Composable
 fun ChristmasTreeHighwayRoadCanvas(
     roadOffset: Float,
@@ -1378,7 +1345,6 @@ fun ChristmasTreeHighwayRoadCanvas(
             drawLine(color = laneColor, start = Offset(rightX1, y1), end = Offset(rightX2, y2), strokeWidth = strokeW, cap = StrokeCap.Round)
         }
 
-        // 도로 양옆 크리스마스 트리 (기존 대비 2배 크기)
         val twinkleAlpha = 0.45f + 0.55f * ((sin(elapsedSec * 4.5f) + 1f) * 0.5f)
         val treeCount = 5
         for (i in 0 until treeCount) {
@@ -2095,7 +2061,6 @@ fun GradientSpeedometer240(
 }
 
 @Composable
-@Composable
 fun CircularTripGauge(
     distanceKm: Float,
     driveTimeSec: Float,
@@ -2174,7 +2139,6 @@ fun CircularTripGauge(
             )
             Spacer(modifier = Modifier.height(6.dp))
 
-            // 도로 선과 겹치지 않도록 전용 배경 칩으로 감싼 운행시간 + 초기화 안내
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
@@ -2199,6 +2163,7 @@ fun CircularTripGauge(
         }
     }
 }
+
 @Composable
 fun WeatherPrecipitationOverlay(
     weather: WeatherType,

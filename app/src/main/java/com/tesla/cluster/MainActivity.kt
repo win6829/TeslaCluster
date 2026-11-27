@@ -89,6 +89,14 @@ enum class ClusterTheme {
     CHRISTMAS
 }
 
+private fun formatDriveTime(totalSeconds: Float): String {
+    val sec = totalSeconds.toInt().coerceAtLeast(0)
+    val h = sec / 3600
+    val m = (sec % 3600) / 60
+    val s = sec % 60
+    return String.format(Locale.US, "%02d:%02d:%02d", h, m, s)
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -155,6 +163,7 @@ fun TeslaClusterScreen() {
     var elapsedSec by remember { mutableFloatStateOf(0f) }
 
     var totalDistanceMeters by remember { mutableFloatStateOf(0f) }
+    var tripDurationSec by remember { mutableFloatStateOf(0f) }
     var lastLocation by remember { mutableStateOf<Location?>(null) }
     var currentAddress by remember { mutableStateOf("위치 수신 대기 중...") }
     var lastGeocodedLocation by remember { mutableStateOf<Location?>(null) }
@@ -249,6 +258,7 @@ fun TeslaClusterScreen() {
             if (smoothSpeedKmh > 0.5f) {
                 val flowRate = (smoothSpeedKmh / 36f) * dtSec
                 roadScrollPhase = (roadScrollPhase + flowRate) % 1f
+                tripDurationSec += dtSec
                 if (isTestDriving) {
                     totalDistanceMeters += (smoothSpeedKmh / 3.6f) * dtSec
                 }
@@ -259,6 +269,10 @@ fun TeslaClusterScreen() {
     }
 
     val displayedSpeedInt = smoothSpeedKmh.roundToInt().coerceIn(0, 240)
+    val resetTrip = {
+        totalDistanceMeters = 0f
+        tripDurationSec = 0f
+    }
 
     DisposableEffect(context) {
         val receiver = object : BroadcastReceiver() {
@@ -440,6 +454,8 @@ fun TeslaClusterScreen() {
             val carCenterYRatio = 0.66f
             val speedCenterXRatio = 0.175f
             val speedCenterYRatio = 0.54f
+            // 테마 1 좌측 속도계 원 지름과 동일한 크기로 Trip A 원형 크기 산출
+            val theme1GaugeSize = minOf(screenW * bgWidthRatio * 0.35f, screenH * 0.68f)
 
             WeatherSkyBackground(
                 weather = activeWeather,
@@ -548,6 +564,18 @@ fun TeslaClusterScreen() {
                     )
                 }
             }
+
+            // 테마 1 우측 Trip A (속도계 원과 동일한 크기 + 운행시간 포함)
+            CircularTripGauge(
+                distanceKm = totalDistanceMeters / 1000f,
+                driveTimeSec = tripDurationSec,
+                isDay = false,
+                onResetTrip = resetTrip,
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 18.dp, top = 16.dp)
+                    .size(theme1GaugeSize)
+            )
         } else if (currentTheme == ClusterTheme.NEON_IONIQ) {
             val bgTopColor by animateColorAsState(
                 targetValue = if (activeIsDay) Color(0xFFEAF2FA) else Color(0xFF020408),
@@ -624,19 +652,21 @@ fun TeslaClusterScreen() {
                         .size(275.dp)
                 )
 
+                // 테마 2 우측 Trip A (좌측 속도계와 동일한 275.dp)
                 CircularTripGauge(
                     distanceKm = totalDistanceMeters / 1000f,
+                    driveTimeSec = tripDurationSec,
                     isDay = activeIsDay,
-                    onResetTrip = { totalDistanceMeters = 0f },
+                    onResetTrip = resetTrip,
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .padding(end = 24.dp, top = 16.dp)
-                        .size(245.dp)
+                        .size(275.dp)
                 )
             }
         } else {
             // =========================================================
-            // [테마 3] 크리스마스 레드 테마 (2번 테마 동일 배치 + 빨간 속도계 + 도로 트리)
+            // [테마 3] 크리스마스 리스(Wreath) 테마 + 산타 썰매 + 2배 트리 + 초록 숫자
             // =========================================================
             val xmasTopColor by animateColorAsState(
                 targetValue = if (activeIsDay) Color(0xFFFFF1F2) else Color(0xFF1A0306),
@@ -671,11 +701,12 @@ fun TeslaClusterScreen() {
                         .align(Alignment.BottomCenter)
                 )
 
+                // 중앙 차량을 산타 썰매(sleigh_santa.png)로 표시
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = 28.dp)
-                        .size(width = 200.dp, height = 112.dp)
+                        .padding(bottom = 24.dp)
+                        .size(width = 215.dp, height = 128.dp)
                         .clickable(
                             interactionSource = remember { MutableInteractionSource() },
                             indication = null
@@ -694,13 +725,14 @@ fun TeslaClusterScreen() {
                         )
                     }
                     Image(
-                        painter = painterResource(id = R.drawable.car_model3),
-                        contentDescription = "Tesla Model 3 Highland",
+                        painter = painterResource(id = R.drawable.sleigh_santa),
+                        contentDescription = "Santa Sleigh",
                         contentScale = ContentScale.Fit,
                         modifier = Modifier.fillMaxSize()
                     )
                 }
 
+                // 좌측 크리스마스 리스 속도계 (275.dp, 초록 숫자)
                 ChristmasRedSpeedometer240(
                     speed = smoothSpeedKmh,
                     displayedSpeedInt = displayedSpeedInt,
@@ -715,14 +747,17 @@ fun TeslaClusterScreen() {
                         .size(275.dp)
                 )
 
+                // 우측 크리스마스 리스 Trip A (275.dp, 초록 숫자 + 운행시간)
                 ChristmasTripGauge(
                     distanceKm = totalDistanceMeters / 1000f,
+                    driveTimeSec = tripDurationSec,
                     isDay = activeIsDay,
-                    onResetTrip = { totalDistanceMeters = 0f },
+                    elapsedSec = elapsedSec,
+                    onResetTrip = resetTrip,
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .padding(end = 24.dp, top = 16.dp)
-                        .size(245.dp)
+                        .size(275.dp)
                 )
             }
         }
@@ -878,57 +913,7 @@ fun TeslaClusterScreen() {
                 }
             }
 
-            if (currentTheme == ClusterTheme.ORIGINAL) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .width(175.dp)
-                            .background(Color(0xD910151E), RoundedCornerShape(16.dp))
-                            .border(1.dp, Color(0xFF263142), RoundedCornerShape(16.dp))
-                            .clickable { totalDistanceMeters = 0f }
-                            .padding(horizontal = 16.dp, vertical = 16.dp)
-                    ) {
-                        Text(
-                            text = "Trip A",
-                            color = Color(0xFF22D3EE),
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text(
-                                text = String.format(Locale.US, "%.1f", totalDistanceMeters / 1000f),
-                                color = Color.White,
-                                fontSize = 34.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "km",
-                                color = Color(0xFFCBD5E1),
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(bottom = 4.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Text(
-                            text = "(터치하여 초기화)",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 11.sp
-                        )
-                    }
-                }
-            } else {
-                Spacer(modifier = Modifier.weight(1f))
-            }
+            Spacer(modifier = Modifier.weight(1f))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -949,7 +934,100 @@ fun TeslaClusterScreen() {
 }
 
 /**
- * [테마 3] 크리스마스 레드 속도계 게이지 (2번 테마와 동일 배치/크기 + 빨간색 위주 디자인)
+ * 문 앞에 거는 둥근 크리스마스 리스(Wreath) 외곽 장식 드로잉
+ * - 겹겹이 쌓인 초록 솔잎 링 + 빨간 호랑가시 열매 + 반짝이는 골드/레드 오너먼트 + 하단 빨간 리본
+ */
+private fun DrawScope.drawChristmasWreathFrame(
+    center: Offset,
+    wreathRadius: Float,
+    twinkle: Float
+) {
+    // 1. 베이스 솔잎 링 (짙은 소나무 그린)
+    drawCircle(
+        color = Color(0xFF14532D),
+        radius = wreathRadius,
+        center = center,
+        style = Stroke(width = 14.dp.toPx())
+    )
+
+    // 2. 풍성한 솔잎 뭉치들 (360도 빙 둘러서 배치)
+    val leafClusters = 36
+    for (i in 0 until leafClusters) {
+        val deg = i * (360f / leafClusters)
+        val rad = Math.toRadians(deg.toDouble())
+        val rOffset = if (i % 2 == 0) 2.5.dp.toPx() else -2.5.dp.toPx()
+        val px = center.x + (cos(rad) * (wreathRadius + rOffset)).toFloat()
+        val py = center.y + (sin(rad) * (wreathRadius + rOffset)).toFloat()
+
+        val leafColor = when (i % 3) {
+            0 -> Color(0xFF166534)
+            1 -> Color(0xFF15803D)
+            else -> Color(0xFF1E7E34)
+        }
+        drawCircle(
+            color = leafColor,
+            radius = 7.dp.toPx(),
+            center = Offset(px, py)
+        )
+    }
+
+    // 3. 리스 위 오너먼트 볼 & 빨간 열매 (12개 포인트)
+    val ornamentCount = 12
+    for (i in 0 until ornamentCount) {
+        val deg = i * (360f / ornamentCount) + 15f
+        val rad = Math.toRadians(deg.toDouble())
+        val ox = center.x + (cos(rad) * wreathRadius).toFloat()
+        val oy = center.y + (sin(rad) * wreathRadius).toFloat()
+
+        if (i % 2 == 0) {
+            // 반짝이는 골드 방울
+            drawCircle(
+                color = Color(0xFFFACC15).copy(alpha = twinkle),
+                radius = 4.2.dp.toPx(),
+                center = Offset(ox, oy)
+            )
+            drawCircle(
+                color = Color(0xFFFFFBEB).copy(alpha = twinkle),
+                radius = 1.5.dp.toPx(),
+                center = Offset(ox - 1.2.dp.toPx(), oy - 1.2.dp.toPx())
+            )
+        } else {
+            // 빨간 호랑가시 열매 2알
+            drawCircle(
+                color = Color(0xFFEF4444),
+                radius = 3.2.dp.toPx(),
+                center = Offset(ox - 2.dp.toPx(), oy)
+            )
+            drawCircle(
+                color = Color(0xFFDC2626),
+                radius = 3.2.dp.toPx(),
+                center = Offset(ox + 2.dp.toPx(), oy + 1.5.dp.toPx())
+            )
+        }
+    }
+
+    // 4. 리스 하단(90도 방향) 빨간 리본 장식
+    val bowCenter = Offset(center.x, center.y + wreathRadius + 2.dp.toPx())
+    val leftWing = Path().apply {
+        moveTo(bowCenter.x, bowCenter.y)
+        lineTo(bowCenter.x - 16.dp.toPx(), bowCenter.y - 8.dp.toPx())
+        lineTo(bowCenter.x - 14.dp.toPx(), bowCenter.y + 8.dp.toPx())
+        close()
+    }
+    val rightWing = Path().apply {
+        moveTo(bowCenter.x, bowCenter.y)
+        lineTo(bowCenter.x + 16.dp.toPx(), bowCenter.y - 8.dp.toPx())
+        lineTo(bowCenter.x + 14.dp.toPx(), bowCenter.y + 8.dp.toPx())
+        close()
+    }
+    drawPath(leftWing, color = Color(0xFFDC2626))
+    drawPath(rightWing, color = Color(0xFFDC2626))
+    drawCircle(color = Color(0xFFEF4444), radius = 4.5.dp.toPx(), center = bowCenter)
+    drawCircle(color = Color(0xFFFACC15), radius = 1.8.dp.toPx(), center = bowCenter)
+}
+
+/**
+ * [테마 3] 크리스마스 리스 속도계 게이지 (275.dp, 숫자 초록색)
  */
 @Composable
 fun ChristmasRedSpeedometer240(
@@ -967,14 +1045,15 @@ fun ChristmasRedSpeedometer240(
     val maxSweep = 270f
     val currentSweep = progress * maxSweep
 
-    val mainTextColor = if (isDay) Color(0xFF3B0712) else Color.White
+    // 크리스마스 테마 속도계 숫자는 모두 초록색
+    val greenNumberColor = if (isDay) Color(0xFF15803D) else Color(0xFF22C55E)
     val subTextColor = if (isDay) Color(0xFF9F1239) else Color(0xFFFDA4AF)
     val glowPrimary = if (isDay) Color(0xFFE11D48) else Color(0xFFFF1E42)
     val ringColor = if (isDay) Color(0xFFDC2626) else Color(0xFFFF2E55)
     val goldAccent = Color(0xFFFACC15)
-    val trackColor = if (isDay) Color(0xFFE11D48).copy(alpha = 0.14f) else Color.White.copy(alpha = 0.14f)
+    val trackColor = if (isDay) Color(0xFFE11D48).copy(alpha = 0.16f) else Color.White.copy(alpha = 0.16f)
     val centerFadeColor = if (isDay) Color(0xFFFFF1F2) else Color(0xFF1A0306)
-    val twinkle = 0.45f + 0.55f * ((sin(elapsedSec * 4.2f) + 1f) * 0.5f)
+    val twinkle = 0.50f + 0.50f * ((sin(elapsedSec * 4.2f) + 1f) * 0.5f)
 
     Box(
         modifier = modifier.clickable(
@@ -984,12 +1063,16 @@ fun ChristmasRedSpeedometer240(
         contentAlignment = Alignment.Center
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val radius = size.minDimension / 2f - 14.dp.toPx()
+            val wreathRadius = size.minDimension / 2f - 10.dp.toPx()
+            val radius = wreathRadius - 12.dp.toPx()
             val center = Offset(size.width / 2f, size.height / 2f)
             val arcTopLeft = Offset(center.x - radius, center.y - radius)
             val arcSize = Size(radius * 2f, radius * 2f)
 
-            // 기본 트랙
+            // 외곽 크리스마스 리스 장식
+            drawChristmasWreathFrame(center = center, wreathRadius = wreathRadius, twinkle = twinkle)
+
+            // 내부 속도계 트랙
             drawArc(
                 color = trackColor,
                 startAngle = startAngle,
@@ -999,27 +1082,6 @@ fun ChristmasRedSpeedometer240(
                 size = arcSize,
                 style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round)
             )
-
-            // 캔디케인 느낌의 외곽 레드/화이트 장식 세그먼트
-            val candySegments = 24
-            val segSweep = maxSweep / candySegments
-            val candyRadius = radius + 6.dp.toPx()
-            for (i in 0 until candySegments) {
-                val segColor = if (i % 2 == 0) {
-                    Color(0xFFEF4444).copy(alpha = 0.72f)
-                } else {
-                    Color.White.copy(alpha = if (isDay) 0.55f else 0.42f)
-                }
-                drawArc(
-                    color = segColor,
-                    startAngle = startAngle + i * segSweep,
-                    sweepAngle = segSweep * 0.75f,
-                    useCenter = false,
-                    topLeft = Offset(center.x - candyRadius, center.y - candyRadius),
-                    size = Size(candyRadius * 2f, candyRadius * 2f),
-                    style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
-                )
-            }
 
             if (currentSweep > 0.5f) {
                 val sweepFrac = (currentSweep / 360f).coerceIn(0.01f, 0.76f)
@@ -1088,9 +1150,10 @@ fun ChristmasRedSpeedometer240(
                 }
             }
 
+            // 눈금 숫자도 초록색으로 통일
             val tickPaint = Paint().apply {
-                color = if (isDay) android.graphics.Color.parseColor("#9F1239") else android.graphics.Color.parseColor("#FFE4E6")
-                textSize = 10.sp.toPx()
+                color = if (isDay) android.graphics.Color.parseColor("#15803D") else android.graphics.Color.parseColor("#4ADE80")
+                textSize = 9.5.sp.toPx()
                 textAlign = Paint.Align.CENTER
                 isAntiAlias = true
                 typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
@@ -1102,7 +1165,7 @@ fun ChristmasRedSpeedometer240(
                 val rad = Math.toRadians(angleDeg.toDouble())
 
                 val outerR = radius - 3.dp.toPx()
-                val innerR = outerR - if (isMajor) 9.dp.toPx() else 4.5.dp.toPx()
+                val innerR = outerR - if (isMajor) 8.dp.toPx() else 4.dp.toPx()
 
                 val tickCol = if (v <= speed) ringColor else trackColor.copy(alpha = 0.65f)
                 drawLine(
@@ -1112,21 +1175,8 @@ fun ChristmasRedSpeedometer240(
                     strokeWidth = if (isMajor) 2.dp.toPx() else 1.2.dp.toPx()
                 )
 
-                // 주요 눈금 바깥쪽에 반짝이는 크리스마스 전구 포인트
-                if (v % 40 == 0) {
-                    val bulbR = radius + 11.dp.toPx()
-                    val bx = center.x + (cos(rad) * bulbR).toFloat()
-                    val by = center.y + (sin(rad) * bulbR).toFloat()
-                    val bulbCol = if ((v / 40) % 2 == 0) goldAccent else Color(0xFFFF3355)
-                    drawCircle(
-                        color = bulbCol.copy(alpha = twinkle),
-                        radius = 3.dp.toPx(),
-                        center = Offset(bx, by)
-                    )
-                }
-
                 if (isMajor) {
-                    val labelR = radius - 21.dp.toPx()
+                    val labelR = radius - 19.dp.toPx()
                     val lx = center.x + (cos(rad) * labelR).toFloat()
                     val ly = center.y + (sin(rad) * labelR).toFloat() + 3.5.dp.toPx()
                     drawContext.canvas.nativeCanvas.drawText(v.toString(), lx, ly, tickPaint)
@@ -1140,24 +1190,24 @@ fun ChristmasRedSpeedometer240(
         ) {
             Text(
                 text = "D",
-                color = mainTextColor,
-                fontSize = 28.sp,
+                color = greenNumberColor,
+                fontSize = 26.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = FontFamily.SansSerif
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = if (isDay) "Xmas Day" else "Xmas Night",
                 color = subTextColor,
-                fontSize = 14.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 fontFamily = FontFamily.SansSerif
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = "$displayedSpeedInt",
-                color = mainTextColor,
-                fontSize = 64.sp,
+                color = greenNumberColor,
+                fontSize = 60.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.SansSerif,
                 letterSpacing = (-2).sp
@@ -1165,7 +1215,7 @@ fun ChristmasRedSpeedometer240(
             Text(
                 text = if (isTestDriving) "TEST" else "km/h",
                 color = if (isTestDriving) Color(0xFF00C853) else subTextColor,
-                fontSize = 16.sp,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
                 fontFamily = FontFamily.SansSerif
             )
@@ -1174,19 +1224,22 @@ fun ChristmasRedSpeedometer240(
 }
 
 /**
- * [테마 3] 크리스마스 레드 Trip A 게이지 (2번 테마 우측 원형 Trip 게이지 동일 위치/구조)
+ * [테마 3] 크리스마스 리스 Trip A 게이지 (275.dp, 숫자 초록색 + 운행시간 표기)
  */
 @Composable
 fun ChristmasTripGauge(
     distanceKm: Float,
+    driveTimeSec: Float,
     isDay: Boolean,
+    elapsedSec: Float,
     onResetTrip: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val mainTextColor = if (isDay) Color(0xFF3B0712) else Color.White
+    val greenNumberColor = if (isDay) Color(0xFF15803D) else Color(0xFF22C55E)
     val subTextColor = if (isDay) Color(0xFF9F1239) else Color(0xFFFDA4AF)
     val accentColor = if (isDay) Color(0xFFE11D48) else Color(0xFFFF2E55)
-    val trackColor = if (isDay) Color(0xFFE11D48).copy(alpha = 0.14f) else Color.White.copy(alpha = 0.14f)
+    val trackColor = if (isDay) Color(0xFFE11D48).copy(alpha = 0.16f) else Color.White.copy(alpha = 0.16f)
+    val twinkle = 0.50f + 0.50f * ((sin(elapsedSec * 4.2f) + 1f) * 0.5f)
 
     val tripProgress = ((distanceKm % 100f) / 100f).coerceIn(0f, 1f)
 
@@ -1198,10 +1251,14 @@ fun ChristmasTripGauge(
         contentAlignment = Alignment.Center
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val radius = size.minDimension / 2f - 14.dp.toPx()
+            val wreathRadius = size.minDimension / 2f - 10.dp.toPx()
+            val radius = wreathRadius - 12.dp.toPx()
             val center = Offset(size.width / 2f, size.height / 2f)
             val arcTopLeft = Offset(center.x - radius, center.y - radius)
             val arcSize = Size(radius * 2f, radius * 2f)
+
+            // 외곽 크리스마스 리스 장식
+            drawChristmasWreathFrame(center = center, wreathRadius = wreathRadius, twinkle = twinkle)
 
             drawArc(
                 color = trackColor,
@@ -1235,32 +1292,40 @@ fun ChristmasTripGauge(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.5.sp
             )
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = String.format(Locale.US, "%.1f", distanceKm),
-                color = mainTextColor,
-                fontSize = 46.sp,
+                color = greenNumberColor,
+                fontSize = 44.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.SansSerif
             )
             Text(
                 text = "km",
                 color = subTextColor,
-                fontSize = 16.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Medium
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = formatDriveTime(driveTimeSec),
+                color = greenNumberColor,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
+            )
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = "(터치하여 초기화)",
                 color = subTextColor.copy(alpha = 0.75f),
-                fontSize = 11.sp
+                fontSize = 10.sp
             )
         }
     }
 }
 
 /**
- * [테마 3] 2번 테마 도로 구성을 기반으로 도로 양옆에 크리스마스 트리가 다가오는 캔버스
+ * [테마 3] 도로 양옆 크리스마스 트리 2배 확대 캔버스
  */
 @Composable
 fun ChristmasTreeHighwayRoadCanvas(
@@ -1275,12 +1340,10 @@ fun ChristmasTreeHighwayRoadCanvas(
         val horizonY = h * 0.14f
         val centerX = w / 2f
 
-        // 설원/도로 배경 그라데이션
         val roadTop = if (isDay) Color(0xFFFFE4E6) else Color(0xFF1F0509)
         val roadBottom = if (isDay) Color(0xFFFFF1F2) else Color(0xFF3A0710)
         drawRect(brush = Brush.verticalGradient(listOf(roadTop, roadBottom)))
 
-        // 중앙 레드/골드 글로우
         val glowColor = if (isDay) Color(0xFFE11D48).copy(alpha = 0.18f) else Color(0xFFFF2E55).copy(alpha = 0.28f)
         drawRect(
             brush = Brush.horizontalGradient(
@@ -1290,12 +1353,10 @@ fun ChristmasTreeHighwayRoadCanvas(
             )
         )
 
-        // 도로 가이드 라인
         val railColor = if (isDay) Color(0xFFBE123C) else Color(0xFFFF3355)
         drawLine(railColor, Offset(centerX - 18f, horizonY), Offset(w * 0.12f, h), strokeWidth = 3.5.dp.toPx())
         drawLine(railColor, Offset(centerX + 18f, horizonY), Offset(w * 0.88f, h), strokeWidth = 3.5.dp.toPx())
 
-        // 중앙 차선 모션
         val laneColor = if (isDay) Color(0xFFDC2626) else Color(0xFFFDE047)
         val dashCount = 7
         for (i in 0 until dashCount) {
@@ -1317,7 +1378,7 @@ fun ChristmasTreeHighwayRoadCanvas(
             drawLine(color = laneColor, start = Offset(rightX1, y1), end = Offset(rightX2, y2), strokeWidth = strokeW, cap = StrokeCap.Round)
         }
 
-        // 도로 양옆 크리스마스 트리 애니메이션 (주행 시 roadOffset에 맞춰 원근 확대 이동)
+        // 도로 양옆 크리스마스 트리 (기존 대비 2배 크기)
         val twinkleAlpha = 0.45f + 0.55f * ((sin(elapsedSec * 4.5f) + 1f) * 0.5f)
         val treeCount = 5
         for (i in 0 until treeCount) {
@@ -1326,13 +1387,13 @@ fun ChristmasTreeHighwayRoadCanvas(
             if (p < 0.04f) continue
 
             val treeY = horizonY + (h - horizonY) * p
-            val scale = (0.25f + 1.15f * p) * (w / 1280f).coerceIn(0.65f, 1.35f)
+            val scale = (0.25f + 1.15f * p) * (w / 1280f).coerceIn(0.65f, 1.35f) * 2.0f
 
             val leftEdgeX = (centerX - 18f) + (w * 0.12f - (centerX - 18f)) * p
             val rightEdgeX = (centerX + 18f) + (w * 0.88f - (centerX + 18f)) * p
 
-            val leftTreeX = leftEdgeX - (52f * scale)
-            val rightTreeX = rightEdgeX + (52f * scale)
+            val leftTreeX = leftEdgeX - (42f * scale)
+            val rightTreeX = rightEdgeX + (42f * scale)
 
             drawRoadsideChristmasTree(
                 centerX = leftTreeX,
@@ -1359,7 +1420,6 @@ private fun DrawScope.drawRoadsideChristmasTree(
     val trunkW = 9f * scale
     val trunkH = 14f * scale
 
-    // 기둥
     drawRect(
         color = Color(0xFF5C2D16),
         topLeft = Offset(centerX - trunkW / 2f, baseY - trunkH),
@@ -1386,7 +1446,6 @@ private fun DrawScope.drawRoadsideChristmasTree(
             color = if (tier % 2 == 0) Color(0xFF14532D) else Color(0xFF166534)
         )
 
-        // 눈 덮인 나뭇잎 끝선
         drawLine(
             color = Color(0xFFF8FAFC).copy(alpha = 0.9f),
             start = Offset(centerX - tw / 2f, bottomY),
@@ -1395,7 +1454,6 @@ private fun DrawScope.drawRoadsideChristmasTree(
             cap = StrokeCap.Round
         )
 
-        // 전구/오너먼트
         drawCircle(
             color = Color(0xFFFF2E55).copy(alpha = twinkleAlpha),
             radius = 2.8f * scale,
@@ -1410,7 +1468,6 @@ private fun DrawScope.drawRoadsideChristmasTree(
         bottomY = topY + th * 0.35f
     }
 
-    // 꼭대기 별 포인트
     drawCircle(
         color = Color(0xFFFACC15).copy(alpha = twinkleAlpha),
         radius = 4.5f * scale,
@@ -2040,6 +2097,7 @@ fun GradientSpeedometer240(
 @Composable
 fun CircularTripGauge(
     distanceKm: Float,
+    driveTimeSec: Float,
     isDay: Boolean,
     onResetTrip: () -> Unit,
     modifier: Modifier = Modifier
@@ -2096,7 +2154,7 @@ fun CircularTripGauge(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.5.sp
             )
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = String.format(Locale.US, "%.1f", distanceKm),
                 color = mainTextColor,
@@ -2107,10 +2165,18 @@ fun CircularTripGauge(
             Text(
                 text = "km",
                 color = subTextColor,
-                fontSize = 16.sp,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.Medium
             )
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = formatDriveTime(driveTimeSec),
+                color = accentColor,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace
+            )
+            Spacer(modifier = Modifier.height(6.dp))
             Text(
                 text = "(터치하여 초기화)",
                 color = subTextColor.copy(alpha = 0.7f),

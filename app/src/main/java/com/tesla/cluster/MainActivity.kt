@@ -2095,6 +2095,7 @@ fun GradientSpeedometer240(
 }
 
 @Composable
+@Composable
 fun CircularTripGauge(
     distanceKm: Float,
     driveTimeSec: Float,
@@ -2103,9 +2104,11 @@ fun CircularTripGauge(
     modifier: Modifier = Modifier
 ) {
     val mainTextColor = if (isDay) Color(0xFF161A20) else Color.White
-    val subTextColor = if (isDay) Color(0xFF5D6673) else Color(0xFFAAB4C2)
+    val subTextColor = if (isDay) Color(0xFF475569) else Color(0xFFAAB4C2)
     val accentColor = if (isDay) Color(0xFF0077E6) else Color(0xFF00D4FF)
-    val trackColor = if (isDay) Color.Black.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.14f)
+    val trackColor = if (isDay) Color.Black.copy(alpha = 0.12f) else Color.White.copy(alpha = 0.14f)
+    val badgeBgColor = if (isDay) Color(0xF2FFFFFF) else Color(0xCC06101E)
+    val badgeBorderColor = if (isDay) Color(0x440077E6) else Color(0x4422D3EE)
 
     val tripProgress = ((distanceKm % 100f) / 100f).coerceIn(0f, 1f)
 
@@ -2145,47 +2148,57 @@ fun CircularTripGauge(
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(horizontal = 20.dp)
         ) {
             Text(
                 text = "TRIP A",
                 color = accentColor,
-                fontSize = 14.sp,
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.5.sp
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = String.format(Locale.US, "%.1f", distanceKm),
                 color = mainTextColor,
-                fontSize = 46.sp,
+                fontSize = 42.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.SansSerif
             )
             Text(
                 text = "km",
                 color = subTextColor,
-                fontSize = 15.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.Medium
             )
             Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = formatDriveTime(driveTimeSec),
-                color = accentColor,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.SemiBold,
-                fontFamily = FontFamily.Monospace
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "(터치하여 초기화)",
-                color = subTextColor.copy(alpha = 0.7f),
-                fontSize = 11.sp
-            )
+
+            // 도로 선과 겹치지 않도록 전용 배경 칩으로 감싼 운행시간 + 초기화 안내
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .background(badgeBgColor, RoundedCornerShape(12.dp))
+                    .border(1.dp, badgeBorderColor, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = formatDriveTime(driveTimeSec),
+                    color = accentColor,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    text = "(터치하여 초기화)",
+                    color = subTextColor,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
     }
 }
-
 @Composable
 fun WeatherPrecipitationOverlay(
     weather: WeatherType,

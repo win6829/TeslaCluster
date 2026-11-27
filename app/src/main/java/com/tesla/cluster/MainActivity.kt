@@ -224,47 +224,56 @@ fun TeslaClusterScreen() {
         }
     }
 
+    // VSYNC 동기화(withFrameNanos) + 부드러운 속도 보간으로 바늘과 숫자가 일정하고 매끄럽게 변화
     val latestMaxSpeed by rememberUpdatedState(currentMaxSpeed)
     LaunchedEffect(Unit) {
-        var lastFrameNs = System.nanoTime()
+        var lastFrameNs = 0L
 
         while (true) {
-            val nowNs = System.nanoTime()
-            val dtSec = ((nowNs - lastFrameNs) / 1_000_000_000.0).toFloat().coerceIn(0.001f, 0.05f)
-            lastFrameNs = nowNs
-            elapsedSec += dtSec
-
-            val maxSpd = latestMaxSpeed
-
-            if (isTestDriving) {
-                val rate = if (testAccelerating) 36f else 42f
-                if (testAccelerating) {
-                    testSpeedKmh = (testSpeedKmh + rate * dtSec).coerceAtMost(maxSpd)
-                    if (testSpeedKmh >= maxSpd) testAccelerating = false
-                } else {
-                    testSpeedKmh = (testSpeedKmh - rate * dtSec).coerceAtLeast(0f)
-                    if (testSpeedKmh <= 0f) testAccelerating = true
+            withFrameNanos { frameTimeNs ->
+                if (lastFrameNs == 0L) {
+                    lastFrameNs = frameTimeNs
+                    return@withFrameNanos
                 }
-            } else {
-                testSpeedKmh = 0f
-            }
+                val dtSec = ((frameTimeNs - lastFrameNs) / 1_000_000_000.0)
+                    .toFloat()
+                    .coerceIn(0.001f, 0.05f)
+                lastFrameNs = frameTimeNs
+                elapsedSec += dtSec
 
-            val rawTarget = if (isTestDriving) testSpeedKmh else gpsSpeedKmh
-            val clampedTarget = rawTarget.coerceIn(0f, maxSpd)
+                val maxSpd = latestMaxSpeed
 
-            val alpha = (1f - exp(-12f * dtSec)).coerceIn(0f, 1f)
-            smoothSpeedKmh += (clampedTarget - smoothSpeedKmh) * alpha
-
-            if (smoothSpeedKmh > 0.5f) {
-                val flowRate = (smoothSpeedKmh / 36f) * dtSec
-                roadScrollPhase = (roadScrollPhase + flowRate) % 1f
-                tripDurationSec += dtSec
                 if (isTestDriving) {
-                    totalDistanceMeters += (smoothSpeedKmh / 3.6f) * dtSec
+                    val rate = if (testAccelerating) 32f else 36f
+                    if (testAccelerating) {
+                        testSpeedKmh = (testSpeedKmh + rate * dtSec).coerceAtMost(maxSpd)
+                        if (testSpeedKmh >= maxSpd) testAccelerating = false
+                    } else {
+                        testSpeedKmh = (testSpeedKmh - rate * dtSec).coerceAtLeast(0f)
+                        if (testSpeedKmh <= 0f) testAccelerating = true
+                    }
+                } else {
+                    testSpeedKmh = 0f
+                }
+
+                val rawTarget = if (isTestDriving) testSpeedKmh else gpsSpeedKmh
+                val clampedTarget = rawTarget.coerceIn(0f, maxSpd)
+
+                // 테스트 주행은 일정한 선형 속도 유지, 실제 GPS 주행은 부드러운 지수 감쇠 적용
+                val smoothingRate = if (isTestDriving) 8.0f else 4.5f
+                val alpha = (1f - exp(-smoothingRate * dtSec)).coerceIn(0f, 1f)
+                val nextSpeed = smoothSpeedKmh + (clampedTarget - smoothSpeedKmh) * alpha
+                smoothSpeedKmh = if (clampedTarget == 0f && nextSpeed < 0.25f) 0f else nextSpeed
+
+                if (smoothSpeedKmh > 0.5f) {
+                    val flowRate = (smoothSpeedKmh / 36f) * dtSec
+                    roadScrollPhase = (roadScrollPhase + flowRate) % 1f
+                    tripDurationSec += dtSec
+                    if (isTestDriving) {
+                        totalDistanceMeters += (smoothSpeedKmh / 3.6f) * dtSec
+                    }
                 }
             }
-
-            delay(16L)
         }
     }
 
@@ -676,8 +685,9 @@ fun TeslaClusterScreen() {
                     .fillMaxSize()
                     .background(Brush.verticalGradient(listOf(xmasTopColor, xmasBottomColor)))
             ) {
+                // 3번 테마도 2번 테마와 동일하게 실시간/수동 날씨(activeWeather)에 연동
                 Theme2SkyBackground(
-                    weather = WeatherType.SNOW,
+                    weather = activeWeather,
                     isDay = activeIsDay,
                     elapsedSec = elapsedSec,
                     modifier = Modifier
@@ -753,12 +763,11 @@ fun TeslaClusterScreen() {
             }
         }
 
-        val effectWeather = if (currentTheme == ClusterTheme.CHRISTMAS) WeatherType.SNOW else activeWeather
-        if (effectWeather == WeatherType.RAIN || effectWeather == WeatherType.SNOW) {
+        // 모든 테마(3번 포함)가 activeWeather에 연동되며, 비/눈은 차량 속도와 무관하게 일정한 속도로 낙하
+        if (activeWeather == WeatherType.RAIN || activeWeather == WeatherType.SNOW) {
             WeatherPrecipitationOverlay(
-                weather = effectWeather,
+                weather = activeWeather,
                 isDay = activeIsDay,
-                speed = smoothSpeedKmh,
                 elapsedSec = elapsedSec,
                 modifier = Modifier.fillMaxSize()
             )
@@ -877,7 +886,7 @@ fun TeslaClusterScreen() {
                             .padding(horizontal = 9.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = if (isXmas) "❄️ 눈$tempText" else "$weatherIcon ${activeWeather.label}$tempText$weatherTag",
+                            text = "$weatherIcon ${activeWeather.label}$tempText$weatherTag",
                             color = topPrimaryText,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium
@@ -2168,26 +2177,24 @@ fun CircularTripGauge(
 fun WeatherPrecipitationOverlay(
     weather: WeatherType,
     isDay: Boolean,
-    speed: Float,
     elapsedSec: Float,
     modifier: Modifier = Modifier
 ) {
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
-        val speedFactor = (speed / 120f).coerceIn(0f, 1.5f)
 
         if (weather == WeatherType.RAIN) {
             val dropCount = 58
             val rainColor = if (isDay) Color(0xFF0284C7) else Color(0xFF93C5FD)
             for (i in 0 until dropCount) {
                 val seed = i * 97.31f
-                val fallSpeed = 0.75f + (i % 5) * 0.14f + speedFactor * 0.35f
+                val fallSpeed = 0.72f + (i % 5) * 0.12f
                 val progress = ((elapsedSec * fallSpeed) + (seed % 1f)) % 1f
-                val x = ((seed * 13.7f) % w) - progress * (18f + speedFactor * 45f)
+                val x = ((seed * 13.7f) % w) - progress * 24f
                 val y = progress * h
-                val len = 14f + (i % 4) * 5f + speedFactor * 10f
-                val slant = 4f + speedFactor * 10f
+                val len = 14f + (i % 4) * 5f
+                val slant = 5f
 
                 drawLine(
                     color = rainColor.copy(alpha = 0.32f + (i % 3) * 0.12f),
@@ -2202,7 +2209,7 @@ fun WeatherPrecipitationOverlay(
             val snowColor = if (isDay) Color(0xFFCBD5E1) else Color.White
             for (i in 0 until flakeCount) {
                 val seed = i * 61.17f
-                val fallSpeed = 0.14f + (i % 4) * 0.04f + speedFactor * 0.22f
+                val fallSpeed = 0.14f + (i % 4) * 0.04f
                 val progress = ((elapsedSec * fallSpeed) + (seed % 1f)) % 1f
                 val sway = sin(elapsedSec * 2f + i) * 18f
                 val x = ((seed * 19.3f) % w) + sway

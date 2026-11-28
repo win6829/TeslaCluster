@@ -41,10 +41,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -53,12 +51,10 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -84,7 +80,6 @@ enum class WeatherType(val label: String, val dayIcon: String, val nightIcon: St
 }
 
 enum class ClusterTheme {
-    ORIGINAL,
     NEON_IONIQ,
     CHRISTMAS
 }
@@ -143,11 +138,11 @@ fun TeslaClusterScreen() {
     val prefs = remember { context.getSharedPreferences("tesla_cluster_prefs", Context.MODE_PRIVATE) }
 
     var currentTheme by remember {
-        val savedName = prefs.getString("last_theme", ClusterTheme.ORIGINAL.name)
+        val savedName = prefs.getString("last_theme", ClusterTheme.NEON_IONIQ.name)
         val restoredTheme = try {
-            ClusterTheme.valueOf(savedName ?: ClusterTheme.ORIGINAL.name)
+            ClusterTheme.valueOf(savedName ?: ClusterTheme.NEON_IONIQ.name)
         } catch (_: Exception) {
-            ClusterTheme.ORIGINAL
+            ClusterTheme.NEON_IONIQ
         }
         mutableStateOf(restoredTheme)
     }
@@ -164,6 +159,8 @@ fun TeslaClusterScreen() {
 
     var totalDistanceMeters by remember { mutableFloatStateOf(0f) }
     var tripDurationSec by remember { mutableFloatStateOf(0f) }
+    var isTripRunning by remember { mutableStateOf(false) }
+
     var lastLocation by remember { mutableStateOf<Location?>(null) }
     var currentAddress by remember { mutableStateOf("위치 수신 대기 중...") }
     var lastGeocodedLocation by remember { mutableStateOf<Location?>(null) }
@@ -224,7 +221,6 @@ fun TeslaClusterScreen() {
         }
     }
 
-    // VSYNC 동기화(withFrameNanos) + 부드러운 속도 보간으로 바늘과 숫자가 일정하고 매끄럽게 변화
     val latestMaxSpeed by rememberUpdatedState(currentMaxSpeed)
     LaunchedEffect(Unit) {
         var lastFrameNs = 0L
@@ -259,7 +255,6 @@ fun TeslaClusterScreen() {
                 val rawTarget = if (isTestDriving) testSpeedKmh else gpsSpeedKmh
                 val clampedTarget = rawTarget.coerceIn(0f, maxSpd)
 
-                // 테스트 주행은 일정한 선형 속도 유지, 실제 GPS 주행은 부드러운 지수 감쇠 적용
                 val smoothingRate = if (isTestDriving) 8.0f else 4.5f
                 val alpha = (1f - exp(-smoothingRate * dtSec)).coerceIn(0f, 1f)
                 val nextSpeed = smoothSpeedKmh + (clampedTarget - smoothSpeedKmh) * alpha
@@ -268,10 +263,15 @@ fun TeslaClusterScreen() {
                 if (smoothSpeedKmh > 0.5f) {
                     val flowRate = (smoothSpeedKmh / 36f) * dtSec
                     roadScrollPhase = (roadScrollPhase + flowRate) % 1f
-                    tripDurationSec += dtSec
+                    isTripRunning = true
                     if (isTestDriving) {
                         totalDistanceMeters += (smoothSpeedKmh / 3.6f) * dtSec
                     }
+                }
+
+                // 차량이 한 번 움직이기 시작하면 리셋 전까지 운행시간 연속 누적
+                if (isTripRunning) {
+                    tripDurationSec += dtSec
                 }
             }
         }
@@ -281,6 +281,7 @@ fun TeslaClusterScreen() {
     val resetTrip = {
         totalDistanceMeters = 0f
         tripDurationSec = 0f
+        isTripRunning = false
     }
 
     DisposableEffect(context) {
@@ -427,9 +428,8 @@ fun TeslaClusterScreen() {
 
     val toggleTheme = {
         val nextTheme = when (currentTheme) {
-            ClusterTheme.ORIGINAL -> ClusterTheme.NEON_IONIQ
             ClusterTheme.NEON_IONIQ -> ClusterTheme.CHRISTMAS
-            ClusterTheme.CHRISTMAS -> ClusterTheme.ORIGINAL
+            ClusterTheme.CHRISTMAS -> ClusterTheme.NEON_IONIQ
         }
         currentTheme = nextTheme
         prefs.edit().putString("last_theme", nextTheme.name).apply()
@@ -446,144 +446,13 @@ fun TeslaClusterScreen() {
     }
 
     val isIoniqDayLight = (currentTheme == ClusterTheme.NEON_IONIQ && activeIsDay)
-    val bgHudBitmap = ImageBitmap.imageResource(id = R.drawable.bg_hud_road)
 
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .background(if (isIoniqDayLight) Color(0xFFF3F6FA) else Color(0xFF000000))
     ) {
-        val screenW = maxWidth
-        val screenH = maxHeight
-
-        if (currentTheme == ClusterTheme.ORIGINAL) {
-            val bgWidthRatio = 0.88f
-            val roadCenterInBg = 0.66f
-            val carCenterXRatio = bgWidthRatio * roadCenterInBg
-            val carCenterYRatio = 0.66f
-            val speedCenterXRatio = 0.175f
-            val speedCenterYRatio = 0.54f
-            val theme1GaugeSize = minOf(screenW * bgWidthRatio * 0.35f, screenH * 0.68f)
-
-            WeatherSkyBackground(
-                weather = activeWeather,
-                isDay = activeIsDay,
-                elapsedSec = elapsedSec,
-                modifier = Modifier.fillMaxSize()
-            )
-
-            Canvas(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .fillMaxHeight()
-                    .fillMaxWidth(bgWidthRatio)
-            ) {
-                drawImage(
-                    image = bgHudBitmap,
-                    dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
-                    blendMode = BlendMode.Screen
-                )
-            }
-
-            SpeedGaugeNeedleOverlay(
-                speed = smoothSpeedKmh,
-                maxSpeed = 240f,
-                centerXRatio = 0.198f,
-                centerYRatio = 0.54f,
-                startAngleDeg = -135f,
-                sweepAngleDeg = 270f,
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .fillMaxHeight()
-                    .fillMaxWidth(bgWidthRatio)
-            )
-
-            AlignedForwardRoadOverlay(
-                speed = smoothSpeedKmh,
-                scrollPhase = roadScrollPhase,
-                roadCenterInBg = roadCenterInBg,
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .fillMaxHeight()
-                    .fillMaxWidth(bgWidthRatio)
-            )
-
-            val carWidth = screenW * 0.175f
-            val carHeight = carWidth * 0.68f
-            Box(
-                modifier = Modifier
-                    .offset(
-                        x = screenW * carCenterXRatio - carWidth / 2,
-                        y = screenH * carCenterYRatio - carHeight / 2
-                    )
-                    .size(width = carWidth, height = carHeight)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { toggleTheme() },
-                contentAlignment = Alignment.Center
-            ) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    drawOval(
-                        brush = Brush.radialGradient(
-                            colors = listOf(Color.Black.copy(alpha = 0.9f), Color.Transparent),
-                            center = Offset(size.width / 2f, size.height * 0.88f),
-                            radius = size.width * 0.52f
-                        ),
-                        topLeft = Offset(size.width * 0.05f, size.height * 0.72f),
-                        size = Size(size.width * 0.9f, size.height * 0.28f)
-                    )
-                }
-                Image(
-                    painter = painterResource(id = R.drawable.car_model3),
-                    contentDescription = "Tesla Model 3 Highland",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-
-            val speedBoxSize = 140.dp
-            Box(
-                modifier = Modifier
-                    .offset(
-                        x = screenW * speedCenterXRatio - speedBoxSize / 2,
-                        y = screenH * speedCenterYRatio - speedBoxSize / 2
-                    )
-                    .size(speedBoxSize)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { toggleTestDrive() },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        text = "$displayedSpeedInt",
-                        color = Color.White,
-                        fontSize = 60.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = (-2).sp
-                    )
-                    Text(
-                        text = if (isTestDriving) "TEST" else "km/h",
-                        color = if (isTestDriving) Color(0xFF00E676) else Color(0xFF94E2F5),
-                        fontSize = 14.sp,
-                        fontWeight = if (isTestDriving) FontWeight.Bold else FontWeight.Medium
-                    )
-                }
-            }
-
-            CircularTripGauge(
-                distanceKm = totalDistanceMeters / 1000f,
-                driveTimeSec = tripDurationSec,
-                isDay = false,
-                onResetTrip = resetTrip,
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 18.dp, top = 16.dp)
-                    .size(theme1GaugeSize)
-            )
-        } else if (currentTheme == ClusterTheme.NEON_IONIQ) {
+        if (currentTheme == ClusterTheme.NEON_IONIQ) {
             val bgTopColor by animateColorAsState(
                 targetValue = if (activeIsDay) Color(0xFFEAF2FA) else Color(0xFF020408),
                 animationSpec = tween(450), label = "t2_top"
@@ -685,7 +554,6 @@ fun TeslaClusterScreen() {
                     .fillMaxSize()
                     .background(Brush.verticalGradient(listOf(xmasTopColor, xmasBottomColor)))
             ) {
-                // 3번 테마도 2번 테마와 동일하게 실시간/수동 날씨(activeWeather)에 연동
                 Theme2SkyBackground(
                     weather = activeWeather,
                     isDay = activeIsDay,
@@ -763,7 +631,6 @@ fun TeslaClusterScreen() {
             }
         }
 
-        // 모든 테마(3번 포함)가 activeWeather에 연동되며, 비/눈은 차량 속도와 무관하게 일정한 속도로 낙하
         if (activeWeather == WeatherType.RAIN || activeWeather == WeatherType.SNOW) {
             WeatherPrecipitationOverlay(
                 weather = activeWeather,
@@ -1034,11 +901,9 @@ fun ChristmasRedSpeedometer240(
 
     val greenNumberColor = if (isDay) Color(0xFF15803D) else Color(0xFF22C55E)
     val subTextColor = if (isDay) Color(0xFF9F1239) else Color(0xFFFDA4AF)
-    val glowPrimary = if (isDay) Color(0xFFE11D48) else Color(0xFFFF1E42)
     val ringColor = if (isDay) Color(0xFFDC2626) else Color(0xFFFF2E55)
     val goldAccent = Color(0xFFFACC15)
     val trackColor = if (isDay) Color(0xFFE11D48).copy(alpha = 0.16f) else Color.White.copy(alpha = 0.16f)
-    val centerFadeColor = if (isDay) Color(0xFFFFF1F2) else Color(0xFF1A0306)
     val twinkle = 0.50f + 0.50f * ((sin(elapsedSec * 4.2f) + 1f) * 0.5f)
 
     Box(
@@ -1067,37 +932,10 @@ fun ChristmasRedSpeedometer240(
                 style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round)
             )
 
+            // 내부 바탕색/블러 처리 없이 진행 링과 바늘만 투명하게 표시
             if (currentSweep > 0.5f) {
                 val sweepFrac = (currentSweep / 360f).coerceIn(0.01f, 0.76f)
                 rotate(degrees = startAngle, pivot = center) {
-                    val sweepBrush = Brush.sweepGradient(
-                        0.0f to glowPrimary.copy(alpha = 0.08f),
-                        (sweepFrac * 0.55f) to glowPrimary.copy(alpha = 0.36f),
-                        sweepFrac to glowPrimary.copy(alpha = 0.80f),
-                        (sweepFrac + 0.005f).coerceAtMost(1f) to Color.Transparent,
-                        center = center
-                    )
-                    drawArc(
-                        brush = sweepBrush,
-                        startAngle = 0f,
-                        sweepAngle = currentSweep,
-                        useCenter = true,
-                        topLeft = arcTopLeft,
-                        size = arcSize
-                    )
-
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            0.0f to centerFadeColor.copy(alpha = 0.92f),
-                            0.46f to centerFadeColor.copy(alpha = 0.78f),
-                            0.84f to Color.Transparent,
-                            center = center,
-                            radius = radius
-                        ),
-                        radius = radius,
-                        center = center
-                    )
-
                     drawArc(
                         brush = Brush.sweepGradient(
                             0.0f to ringColor.copy(alpha = 0.30f),
@@ -1172,7 +1010,7 @@ fun ChristmasRedSpeedometer240(
             verticalArrangement = Arrangement.Center
         ) {
             Text(
-                text = "D",
+                text = if (displayedSpeedInt == 0) "N" else "D",
                 color = greenNumberColor,
                 fontSize = 26.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -1521,161 +1359,6 @@ private fun DrawScope.drawVolumetricCumulus(
 }
 
 @Composable
-fun WeatherSkyBackground(
-    weather: WeatherType,
-    isDay: Boolean,
-    elapsedSec: Float,
-    modifier: Modifier = Modifier
-) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val horizonY = h * 0.48f
-
-        val skyColors = if (isDay) {
-            when (weather) {
-                WeatherType.CLEAR -> listOf(Color(0xFF1565C0), Color(0xFF42A5F5), Color(0xFF0D2E54), Color(0xFF000000))
-                WeatherType.CLOUDY -> listOf(Color(0xFF334155), Color(0xFF475569), Color(0xFF1E293B), Color(0xFF000000))
-                WeatherType.RAIN -> listOf(Color(0xFF1E293B), Color(0xFF334155), Color(0xFF0F172A), Color(0xFF000000))
-                WeatherType.SNOW -> listOf(Color(0xFF475569), Color(0xFF64748B), Color(0xFF1E293B), Color(0xFF000000))
-            }
-        } else {
-            when (weather) {
-                WeatherType.CLEAR -> listOf(Color(0xFF040A17), Color(0xFF0C1B36), Color(0xFF050A14), Color(0xFF000000))
-                WeatherType.CLOUDY -> listOf(Color(0xFF0C121D), Color(0xFF1A2433), Color(0xFF070B12), Color(0xFF000000))
-                WeatherType.RAIN -> listOf(Color(0xFF070B12), Color(0xFF121A26), Color(0xFF04060A), Color(0xFF000000))
-                WeatherType.SNOW -> listOf(Color(0xFF0E1724), Color(0xFF1E2C3D), Color(0xFF080D14), Color(0xFF000000))
-            }
-        }
-
-        drawRect(
-            brush = Brush.verticalGradient(
-                colorStops = arrayOf(
-                    0.0f to skyColors[0],
-                    0.26f to skyColors[1],
-                    0.46f to skyColors[2],
-                    0.62f to skyColors[3]
-                ),
-                startY = 0f,
-                endY = h
-            )
-        )
-
-        if (isDay) {
-            when (weather) {
-                WeatherType.CLEAR -> {
-                    val sunCenter = Offset(w * 0.62f, h * 0.17f)
-                    val pulse = 1f + sin(elapsedSec * 1.5f) * 0.04f
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(
-                                Color(0xFFFFF9C4).copy(alpha = 0.98f),
-                                Color(0xFFFFD54F).copy(alpha = 0.55f),
-                                Color(0xFF64B5F6).copy(alpha = 0.18f),
-                                Color.Transparent
-                            ),
-                            center = sunCenter,
-                            radius = h * 0.26f * pulse
-                        ),
-                        center = sunCenter,
-                        radius = h * 0.26f * pulse
-                    )
-                    drawCircle(color = Color(0xFFFFFDE7), center = sunCenter, radius = h * 0.044f)
-
-                    val drift = (elapsedSec * 14f) % (w + 340f)
-                    val whiteShadow = Color(0xFFCFDCEB).copy(alpha = 0.65f)
-                    val whiteBody = Color(0xFFF8FAFC).copy(alpha = 0.90f)
-                    val whiteHi = Color(0xFFFFFFFF).copy(alpha = 0.98f)
-                    drawVolumetricCumulus(((drift) % (w + 340f)) - 170f, h * 0.20f, 0.85f, whiteShadow, whiteBody, whiteHi)
-                    drawVolumetricCumulus(((drift + (w + 340f) * 0.48f) % (w + 340f)) - 170f, h * 0.15f, 0.72f, whiteShadow, whiteBody, whiteHi)
-                }
-
-                WeatherType.CLOUDY, WeatherType.RAIN, WeatherType.SNOW -> {
-                    val (shadowC, bodyC, hiC) = when (weather) {
-                        WeatherType.SNOW -> Triple(
-                            Color(0xFF475569).copy(alpha = 0.80f),
-                            Color(0xFF94A3B8).copy(alpha = 0.85f),
-                            Color(0xFFCBD5E1).copy(alpha = 0.85f)
-                        )
-                        else -> Triple(
-                            Color(0xFF1A232E).copy(alpha = 0.92f),
-                            Color(0xFF334155).copy(alpha = 0.90f),
-                            Color(0xFF64748B).copy(alpha = 0.72f)
-                        )
-                    }
-                    val drift = (elapsedSec * 18f) % (w + 340f)
-                    for (i in 0..3) {
-                        val bx = ((i * w * 0.30f) + drift) % (w + 340f) - 170f
-                        val by = h * (0.14f + (i % 2) * 0.08f)
-                        drawVolumetricCumulus(bx, by, 1.05f + (i % 2) * 0.25f, shadowC, bodyC, hiC)
-                    }
-                }
-            }
-        } else {
-            when (weather) {
-                WeatherType.CLEAR -> {
-                    val starCount = 34
-                    for (i in 0 until starCount) {
-                        val sx = ((i * 173.3f) % 0.94f + 0.03f) * w
-                        val sy = ((i * 89.7f) % 0.38f + 0.03f) * h
-                        val twinkle = (0.35f + 0.65f * ((sin(elapsedSec * (1.5f + (i % 4) * 0.7f) + i) + 1f) * 0.5f))
-                        val radius = (0.9f + (i % 3) * 0.6f).dp.toPx()
-                        drawCircle(color = Color(0xFFE2F1FF).copy(alpha = twinkle), center = Offset(sx, sy), radius = radius)
-                    }
-
-                    val moonCenter = Offset(w * 0.63f, h * 0.17f)
-                    val moonR = h * 0.048f
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(Color(0xFFFFF8DC).copy(alpha = 0.55f), Color(0xFF93C5FD).copy(alpha = 0.22f), Color.Transparent),
-                            center = moonCenter,
-                            radius = moonR * 4.2f
-                        ),
-                        center = moonCenter,
-                        radius = moonR * 4.2f
-                    )
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colors = listOf(Color(0xFFFFFBEB), Color(0xFFFEF08A), Color(0xFFE2E8F0)),
-                            center = Offset(moonCenter.x - moonR * 0.2f, moonCenter.y - moonR * 0.2f),
-                            radius = moonR * 1.15f
-                        ),
-                        center = moonCenter,
-                        radius = moonR
-                    )
-                    drawCircle(color = Color(0xFFD6D3C4).copy(alpha = 0.35f), center = Offset(moonCenter.x + moonR * 0.28f, moonCenter.y - moonR * 0.12f), radius = moonR * 0.22f)
-                    drawCircle(color = Color(0xFFD6D3C4).copy(alpha = 0.28f), center = Offset(moonCenter.x - moonR * 0.22f, moonCenter.y + moonR * 0.25f), radius = moonR * 0.16f)
-                }
-
-                WeatherType.CLOUDY, WeatherType.RAIN, WeatherType.SNOW -> {
-                    val (shadowC, bodyC, hiC) = Triple(
-                        Color(0xFF0F172A).copy(alpha = 0.88f),
-                        Color(0xFF1E293B).copy(alpha = 0.85f),
-                        Color(0xFF334155).copy(alpha = 0.60f)
-                    )
-                    val drift = (elapsedSec * 14f) % (w + 340f)
-                    for (i in 0..3) {
-                        val bx = ((i * w * 0.30f) + drift) % (w + 340f) - 170f
-                        val by = h * (0.14f + (i % 2) * 0.08f)
-                        drawVolumetricCumulus(bx, by, 1.05f + (i % 2) * 0.25f, shadowC, bodyC, hiC)
-                    }
-                }
-            }
-        }
-
-        drawRect(
-            brush = Brush.verticalGradient(
-                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.88f)),
-                startY = horizonY * 0.7f,
-                endY = horizonY * 1.25f
-            ),
-            topLeft = Offset(0f, horizonY * 0.7f),
-            size = Size(w, horizonY * 0.55f)
-        )
-    }
-}
-
-@Composable
 fun Theme2SkyBackground(
     weather: WeatherType,
     isDay: Boolean,
@@ -1903,10 +1586,8 @@ fun GradientSpeedometer240(
 
     val mainTextColor = if (isDay) Color(0xFF161A20) else Color.White
     val subTextColor = if (isDay) Color(0xFF5D6673) else Color(0xFFAAB4C2)
-    val glowPrimary = if (isDay) Color(0xFF007BFF) else Color(0xFF00D4FF)
     val ringColor = if (isDay) Color(0xFF0077E6) else Color(0xFF2EE6FF)
     val trackColor = if (isDay) Color.Black.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.14f)
-    val centerFadeColor = if (isDay) Color(0xFFF6F8FB) else Color(0xFF030710)
 
     Box(
         modifier = modifier.clickable(
@@ -1931,37 +1612,10 @@ fun GradientSpeedometer240(
                 style = Stroke(width = 5.dp.toPx(), cap = StrokeCap.Round)
             )
 
+            // 내부 바탕색/블러 처리 없이 진행 링과 바늘만 투명하게 표시
             if (currentSweep > 0.5f) {
                 val sweepFrac = (currentSweep / 360f).coerceIn(0.01f, 0.76f)
                 rotate(degrees = startAngle, pivot = center) {
-                    val sweepBrush = Brush.sweepGradient(
-                        0.0f to glowPrimary.copy(alpha = 0.06f),
-                        (sweepFrac * 0.55f) to glowPrimary.copy(alpha = 0.34f),
-                        sweepFrac to glowPrimary.copy(alpha = 0.78f),
-                        (sweepFrac + 0.005f).coerceAtMost(1f) to Color.Transparent,
-                        center = center
-                    )
-                    drawArc(
-                        brush = sweepBrush,
-                        startAngle = 0f,
-                        sweepAngle = currentSweep,
-                        useCenter = true,
-                        topLeft = arcTopLeft,
-                        size = arcSize
-                    )
-
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            0.0f to centerFadeColor.copy(alpha = 0.92f),
-                            0.46f to centerFadeColor.copy(alpha = 0.78f),
-                            0.84f to Color.Transparent,
-                            center = center,
-                            radius = radius
-                        ),
-                        radius = radius,
-                        center = center
-                    )
-
                     drawArc(
                         brush = Brush.sweepGradient(
                             0.0f to ringColor.copy(alpha = 0.25f),
@@ -2035,7 +1689,7 @@ fun GradientSpeedometer240(
             verticalArrangement = Arrangement.Center
         ) {
             Text(
-                text = "D",
+                text = if (displayedSpeedInt == 0) "N" else "D",
                 color = mainTextColor,
                 fontSize = 28.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -2220,130 +1874,6 @@ fun WeatherPrecipitationOverlay(
                     color = snowColor.copy(alpha = 0.55f + (i % 3) * 0.15f),
                     center = Offset(x, y),
                     radius = r
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun SpeedGaugeNeedleOverlay(
-    speed: Float,
-    maxSpeed: Float,
-    centerXRatio: Float = 0.198f,
-    centerYRatio: Float = 0.54f,
-    startAngleDeg: Float = -135f,
-    sweepAngleDeg: Float = 270f,
-    modifier: Modifier = Modifier
-) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-
-        val cx = w * centerXRatio
-        val cy = h * centerYRatio
-        val radius = minOf(w * 0.175f, h * 0.34f)
-
-        val progress = (speed / maxSpeed).coerceIn(0f, 1f)
-        val angleDeg = startAngleDeg + (sweepAngleDeg * progress)
-
-        rotate(degrees = angleDeg, pivot = Offset(cx, cy)) {
-            val glowStartY = cy - radius * 0.72f
-            val tipY = cy - radius * 1.02f
-
-            drawLine(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF22D3EE).copy(alpha = 0.0f),
-                        Color(0xFF22D3EE).copy(alpha = 0.55f),
-                        Color(0xFFE0F2FE).copy(alpha = 0.9f)
-                    ),
-                    startY = glowStartY,
-                    endY = tipY
-                ),
-                start = Offset(cx, glowStartY),
-                end = Offset(cx, tipY),
-                strokeWidth = 9.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-
-            val needlePath = Path().apply {
-                moveTo(cx - 3.2.dp.toPx(), cy - radius * 0.74f)
-                lineTo(cx + 3.2.dp.toPx(), cy - radius * 0.74f)
-                lineTo(cx + 1.1.dp.toPx(), tipY)
-                lineTo(cx - 1.1.dp.toPx(), tipY)
-                close()
-            }
-            drawPath(
-                path = needlePath,
-                brush = Brush.verticalGradient(
-                    colors = listOf(Color(0xFF38BDF8), Color.White),
-                    startY = glowStartY,
-                    endY = tipY
-                )
-            )
-        }
-    }
-}
-
-@Composable
-fun AlignedForwardRoadOverlay(
-    speed: Float,
-    scrollPhase: Float,
-    roadCenterInBg: Float,
-    modifier: Modifier = Modifier
-) {
-    if (speed <= 0.5f) return
-
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val intensity = (speed / 120f).coerceIn(0.12f, 1.35f)
-
-        val centerX = w * roadCenterInBg
-        val topY = h * 0.335f
-        val botY = h * 0.77f
-        val topHalfW = w * 0.032f
-        val botHalfW = w * 0.34f
-
-        val innerLaneRatios = listOf(-0.46f, 0.46f)
-        val outerRailRatios = listOf(-0.96f, 0.96f)
-        val dashCount = 7
-
-        for (i in 0 until dashCount) {
-            val rawT = ((i.toFloat() / dashCount) + scrollPhase) % 1f
-            val p1 = rawT * rawT
-            val dashLen = (0.045f + 0.045f * intensity) * (0.35f + rawT)
-            val p2 = (rawT + dashLen).coerceAtMost(1f).let { it * it }
-
-            val y1 = topY + (botY - topY) * p1
-            val y2 = topY + (botY - topY) * p2
-            if (y2 <= y1) continue
-
-            val halfW1 = topHalfW + (botHalfW - topHalfW) * p1
-            val halfW2 = topHalfW + (botHalfW - topHalfW) * p2
-
-            val innerAlpha = ((0.22f + 0.55f * p1) * intensity).coerceIn(0f, 0.85f)
-            val innerStroke = ((1.2f + 2.4f * p1) * (0.8f + 0.3f * intensity)).dp.toPx()
-            for (ratio in innerLaneRatios) {
-                drawLine(
-                    color = Color(0xFF67E8F9).copy(alpha = innerAlpha),
-                    start = Offset(centerX + halfW1 * ratio, y1),
-                    end = Offset(centerX + halfW2 * ratio, y2),
-                    strokeWidth = innerStroke,
-                    cap = StrokeCap.Round
-                )
-            }
-
-            val outerAlpha = ((0.14f + 0.36f * p1) * intensity).coerceIn(0f, 0.6f)
-            val outerStroke = ((1.0f + 1.8f * p1) * (0.75f + 0.25f * intensity)).dp.toPx()
-            for (ratio in outerRailRatios) {
-                drawLine(
-                    color = Color(0xFFBAE6FD).copy(alpha = outerAlpha),
-                    start = Offset(centerX + halfW1 * ratio, y1),
-                    end = Offset(centerX + halfW2 * ratio, y2),
-                    strokeWidth = outerStroke,
-                    cap = StrokeCap.Round
                 )
             }
         }
